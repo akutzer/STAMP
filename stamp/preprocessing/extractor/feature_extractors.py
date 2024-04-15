@@ -9,16 +9,30 @@ from torchvision.transforms import v2 as transforms
 import numpy as np
 import h5py
 from tqdm import tqdm
+import os
+import uni
 
 from .swin_transformer import swin_tiny_patch4_window7_224, ConvStem
 
-__version__ = "001_01-10-2023"
+
+__version__ = "1.0.3_15-04-2024"
+
+
+def get_digest(file: str):
+    sha256 = hashlib.sha256()
+    with open(file, 'rb') as f:
+        while True:
+            data = f.read(1 << 16)
+            if not data:
+                break
+            sha256.update(data)
+    return sha256.hexdigest()
 
 
 class FeatureExtractor:
     """Extracts features from slide tiles."""
 
-    def __init__(self, model: str, model_name: str, device: str = "cpu"):
+    def __init__(self, model: str, model_name: str, transform = None, device: str = "cpu"):
         self.model_name = model_name
         self.model_type = "CTransPath"
         self.name = f"STAMP-extract-{__version__}_{model_name}"
@@ -26,22 +40,18 @@ class FeatureExtractor:
         self.model = model
         self.model = self.model.to(device)
         self.model.eval()
+        self.transform = transform
 
         self.device = torch.device(device)
         self.dtype = next(self.model.parameters()).dtype
 
     @classmethod
-    def from_checkpoint(cls, checkpoint_path: str, device: str) -> "FeatureExtractor":
+    def init_ctranspath(cls, checkpoint_path: str, device: str) -> "FeatureExtractor":
         # loading the checkpoint weights
-        sha256 = hashlib.sha256()
-        with open(checkpoint_path, "rb") as f:
-            while True:
-                data = f.read(1 << 16)
-                if not data:
-                    break
-                sha256.update(data)
-        assert sha256.hexdigest() == "7c998680060c8743551a412583fac689db43cec07053b72dfec6dcd810113539"
-        model_name = "xiyuewang-ctranspath-7c998680"
+        digest = get_digest(checkpoint_path)
+        assert digest == "7c998680060c8743551a412583fac689db43cec07053b72dfec6dcd810113539"
+
+        model_name = f"xiyuewang-ctranspath-{digest[:8]}"
         ctranspath_weights = torch.load(checkpoint_path, map_location=torch.device("cpu"))
 
         # initializing the model and updating the weights
@@ -49,8 +59,42 @@ class FeatureExtractor:
         model.head = nn.Identity()
         model.load_state_dict(ctranspath_weights["model"], strict=True)
 
-        extractor = cls(model, model_name, device)
+        transform = transforms.Compose([
+            transforms.ToImage(),  # Convert to tensor, only needed for PIL images
+            transforms.ToDtype(torch.uint8, scale=True),  # optional, most input are already uint8 at this point
+            transforms.Resize(size=(224, 224), antialias=True),
+            transforms.ToDtype(torch.float32, scale=True),  # Normalize expects float input
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]), # ImageNet normalization
+        ])
+
+        extractor = cls(model, model_name, transform, device)
         print("CTransPath model successfully initialized...\n")
+
+        return extractor
+    
+    @classmethod
+    def init_uni(cls, device: str, **kwargs) -> "FeatureExtractor":
+        """Extracts features from slide tiles. 
+        Requirements: 
+            Permission from authors via huggingface: https://huggingface.co/MahmoodLab/UNI
+            Huggingface account with valid login token
+        On first model initialization, you will be prompted to enter your login token. The token is
+        then stored in ./home/<user>/.cache/huggingface/token. Subsequent inits do not require you to re-enter the token. 
+
+        Args:
+            device: "cuda" or "cpu"
+        """
+        
+        # loading the checkpoint weights
+        asset_dir = f"{os.environ['STAMP_RESOURCES_DIR']}/uni"
+        digest = get_digest(f"{asset_dir}/vit_large_patch16_224.dinov2.uni_mass100k/pytorch_model.bin")
+        model_name = f"mahmood-uni-{digest[:8]}"
+
+        # initializing the model and updating the weights
+        model, transform = uni.get_encoder(enc_name="uni", device=device, assets_dir=asset_dir, center_crop=False, **kwargs)
+
+        extractor = cls(model, model_name, transform, device)
+        print("UNI model successfully initialized...\n")
 
         return extractor
 
@@ -63,15 +107,7 @@ class FeatureExtractor:
             patches:  Array of shape (n_patches, patch_h, patch_w, 3)
             cores:  Number of cores for dataloader
         """
-        transform = transforms.Compose([
-            transforms.ToImage(),  # Convert to tensor, only needed for PIL images
-            transforms.ToDtype(torch.uint8, scale=True),  # optional, most input are already uint8 at this point
-            transforms.Resize(size=(224, 224), antialias=True),
-            transforms.ToDtype(torch.float32, scale=True),  # Normalize expects float input
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        ])
-
-        dataset = SlideTileDataset(patches, transform)
+        dataset = SlideTileDataset(patches, self.transform)
         dataloader = DataLoader(
             dataset,
             batch_size=batch_size,

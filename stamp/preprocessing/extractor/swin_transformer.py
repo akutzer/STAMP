@@ -16,6 +16,7 @@ model.load_state_dict(td['model'], strict=True)
 """
 import math
 import collections.abc
+import warnings
 
 from typing import Optional
 from itertools import repeat
