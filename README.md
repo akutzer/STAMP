@@ -1,5 +1,8 @@
 [![PWC](https://img.shields.io/endpoint.svg?url=https://paperswithcode.com/badge/from-whole-slide-image-to-biomarker/classification-on-tcga)](https://paperswithcode.com/sota/classification-on-tcga?p=from-whole-slide-image-to-biomarker)
 
+> [!Important]
+> STAMP v1.0.3 now has built-in support for the [UNI Feature extractor](https://www.nature.com/articles/s41591-024-02857-3). Using it will require a Hugging Face account with granted access to the UNI model. For details on fair use, licensing and accessing the UNI model weights, refer to the [UNI GitHub repository](https://www.github.com/mahmoodlab/UNI.git). Note that the installation instructions within the [STAMP protocol paper](https://arxiv.org/abs/2312.10944v1) refer to v1.0.1 of the software, and that v1.0.3 has updated installation steps, see below. The README file will always contain the most up-to-date installation instructions.
+
 # STAMP protocol <img src="docs/STAMP_logo.svg" width="250px" align="right" />
 A protocol for Solid Tumor Associative Modeling in Pathology. This repository contains the accompanying code for the steps described in the [preprint](https://arxiv.org/abs/2312.10944v1): 
 
@@ -30,10 +33,19 @@ pip install git+https://github.com/KatherLab/STAMP
 
 Once installed, you will be able to run the command line interface directly using the `stamp` command.
 
-Finally, to download required resources such as the weights of the CTransPath feature extractor, run the following command:
+Next, initialize STAMP and obtain the required configuration file, config.yaml, in your current working directory, by running the following command:
+
+```bash
+stamp init
+```
+
+To download required resources such as the weights of the feature extractor, run the following command:
 ```bash
 stamp setup
 ```
+
+> [!Note]
+> If you select a different feature extractor withing the configuration file, such as UNI, you will need to re-run the previous setup command to initiate the downloading step of the UNI feature extractor weights. This will trigger a prompt asking for your Hugging Face access key for the UNI model weights.
 
 ## Using the container
 First, install Go and Singularity on your local machine using the [official installation instructions](https://docs.sylabs.io/guides/3.0/user-guide/installation.html). Note that the High-Performance Cluster (HPC) has Go and Singularity pre-installed, and do not require installation.
@@ -61,6 +73,7 @@ Note that the binding of filesystems (-B) should be adapted to your own system. 
 ## Running
 Available commands are:
 ```bash
+stamp init       # create a new configuration file in the current directory
 stamp setup      # download required resources
 stamp config     # print resolved configuration
 stamp preprocess # normalization and feature extraction with CTransPath
@@ -71,7 +84,8 @@ stamp statistics # compute stats including ROC curves
 stamp heatmaps   # generate heatmaps
 ```
 
-By default, stamp will use the configuration file `config.yaml` in the current working directory. If you want to use a different configuration file use the `--config` command line option, i.e. `stamp --config some/other/file.yaml train`.
+> [!NOTE]  
+> By default, STAMP will use the configuration file `config.yaml` in the current working directory (or, if that does not exist, it will use the [default STAMP configuration file](stamp/config.yaml) shipped with this package). If you want to use a different configuration file, use the `--config` command line option, i.e. `stamp --config some/other/file.yaml train`. You may also run `stamp init` to create a local `config.yaml` in the current working directory initialized to the default settings.
 
 ## Reference
 

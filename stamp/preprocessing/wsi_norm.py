@@ -23,6 +23,13 @@ import torch
 from .normalizer.normalizer import MacenkoNormalizer
 from .extractor.feature_extractors import FeatureExtractor, store_features, store_metadata
 from .helpers.common import supported_extensions
+
+# upstream:
+# from .helpers.concurrent_canny_rejection import reject_background
+# from .helpers.loading_slides import process_slide_jpg, load_slide, get_raw_tile_list
+# from .helpers.feature_extractors import FeatureExtractorCTP, FeatureExtractorUNI, extract_features_
+
+# downstream:
 from .helpers.exceptions import MPPExtractionError
 from .helpers.load_slides import load_slide
 from .helpers.load_patches import extract_patches, reconstruct_from_patches
@@ -33,29 +40,31 @@ from .helpers.background_rejection import filter_background
 Image.MAX_IMAGE_PIXELS = None
 
 
+def clean_lockfile(file):
+    if os.path.exists(file): # Catch collision cases
+        os.remove(file)
+
 @contextmanager
 def lock_file(slide_path: Path):
     try:
-        Path(f"{slide_path}.tmp").touch()
+        Path(f"{slide_path}.lock").touch()
     except PermissionError:
         pass # No write permissions for wsi directory
     try:
         yield
     finally:
-        if os.path.exists(f"{slide_path}.tmp"): # Catch collision cases
-            os.remove(f"{slide_path}.tmp")
+        clean_lockfile(f"{slide_path}.lock")
 
 
 def test_wsidir_write_permissions(wsi_dir: Path):
     try:
-        testfile = wsi_dir/f"test_{time.time()}.tmp"
+        testfile = wsi_dir/f"test_{str(os.getpid())}.tmp"
         Path(testfile).touch()
     except PermissionError:
         logging.warning("No write permissions for wsi directory! If multiple stamp processes are running "
                         "in parallel, the final summary may show an incorrect number of slides processed.")
     finally:
-        if os.path.exists(testfile):
-            os.remove(testfile)
+        clean_lockfile(testfile)
 
 
 def save_image(image, path: Path):
@@ -67,22 +76,55 @@ def save_image(image, path: Path):
     image.save(path)
 
 
+# downstream:
 def preprocess(output_dir: Path, wsi_dir: Path, model_path: Path, cache_dir: Path,
                cache: bool = False, norm: bool = False, normalization_template: Optional[Path] = None,
                del_slide: bool = False, only_feature_extraction: bool = False,
                keep_dir_structure: bool = False, cores: int = 8, target_microns: int = 256,
-               patch_size: int = 224, batch_size: int = 64, device: str = "cuda"
+               patch_size: int = 224, batch_size: int = 64, device: str = "cuda",
+               feat_extractor: str = "ctp"
                ):
+#     target_mpp = target_microns / patch_size
+#     patch_size = (patch_size, patch_size) # (224, 224) by default
+
+#     # Initialize the feature extraction model
+#     print(f"Initializing CTransPath model as feature extractor...")
+#     has_gpu = torch.cuda.is_available()
+#     device = torch.device(device) if "cuda" in device and has_gpu else torch.device("cpu")
+#     extractor = FeatureExtractor.from_checkpoint(checkpoint_path=model_path, device=device)
+
+#     # Create output and cache directories
+    
+
+# def preprocess(output_dir: Path, wsi_dir: Path, model_path: Path, cache_dir: Path, norm: bool,
+#                del_slide: bool, only_feature_extraction: bool, cache: bool = True, cores: int = 8,
+#                target_microns: int = 256, patch_size: int = 224, keep_dir_structure: bool = False,
+#                device: str = "cuda", normalization_template: Path = None, feat_extractor: str = "ctp"):
+    # Clean up potentially old leftover .lock files
+    for lockfile in wsi_dir.glob("**/*.lock"):
+        if time.time() - os.path.getmtime(lockfile) > 20:
+            clean_lockfile(lockfile)
+    
     target_mpp = target_microns / patch_size
     patch_size = (patch_size, patch_size) # (224, 224) by default
 
+
     # Initialize the feature extraction model
-    print(f"Initializing CTransPath model as feature extractor...")
+    print(f"Initialising feature extractor {feat_extractor}...")
     has_gpu = torch.cuda.is_available()
     device = torch.device(device) if "cuda" in device and has_gpu else torch.device("cpu")
-    extractor = FeatureExtractor.from_checkpoint(checkpoint_path=model_path, device=device)
+    # extractor = FeatureExtractor.from_checkpoint(checkpoint_path=model_path, device=device)
+    if feat_extractor == "ctp":
+        extractor = FeatureExtractor.init_ctranspath(model_path, device)
+    elif feat_extractor == "uni":
+        extractor = FeatureExtractor.init_uni(device)
+    else:
+        raise Exception(f"Invalid feature extractor '{feat_extractor}' selected")
+    # model_name = extractor.init_feat_extractor(device=device)
 
-    # Create output and cache directories
+    # Create cache and output directories
+    if cache:
+        cache_dir.mkdir(exist_ok=True, parents=True)
     output_dir.mkdir(parents=True, exist_ok=True)
     norm_method = "STAMP_macenko_" if norm else "STAMP_raw_"
     model_name_norm = Path(norm_method + extractor.model_name)
@@ -92,7 +134,7 @@ def preprocess(output_dir: Path, wsi_dir: Path, model_path: Path, cache_dir: Pat
         cache_dir.mkdir(exist_ok=True, parents=True)
 
     # Create logfile and set up logging
-    logfile_name = "logfile_" + time.strftime("%Y-%m-%d_%H-%M-%S")
+    logfile_name = "logfile_" + time.strftime("%Y-%m-%d_%H-%M-%S") + "_" + str(os.getpid())
     logdir = output_file_dir/logfile_name
     logging.basicConfig(filename=logdir, force=True, level=logging.INFO, format="[%(levelname)s] %(message)s")
     logging.getLogger().addHandler(logging.StreamHandler())
@@ -151,7 +193,7 @@ def preprocess(output_dir: Path, wsi_dir: Path, model_path: Path, cache_dir: Pat
         else:
             (output_file_dir/slide_subdir).mkdir(parents=True, exist_ok=True)
             feat_out_dir = output_file_dir/slide_subdir/slide_name
-        if not (os.path.exists((f"{feat_out_dir}.h5"))) and not os.path.exists(f"{slide_url}.tmp"):
+        if not (os.path.exists((f"{feat_out_dir}.h5"))) and not os.path.exists(f"{slide_url}.lock"):
             with lock_file(slide_url):
                 if (
                     (only_feature_extraction and (slide_jpg := slide_url).exists()) or \
@@ -239,7 +281,7 @@ def preprocess(output_dir: Path, wsi_dir: Path, model_path: Path, cache_dir: Pat
                         if os.path.exists(slide_url):
                             os.remove(slide_url)
 
-                print("\nExtracting CTransPath features from slide...")
+                print(f"\nExtracting {extractor.name} features from slide...")
                 start_time = time.time()
                 if patches.shape[0] > 0:
                     store_metadata(
