@@ -127,7 +127,7 @@ def run_cli(args: argparse.Namespace):
                 model_path=Path(c.model_path),
                 cache_dir=Path(c.cache_dir),
                 feat_extractor=c.feat_extractor,
-                # patch_size=c.patch_size,
+                # patch_size=c.patch_size if 'patch_size' in c else 224,
                 target_microns=c.microns,
                 cores=c.cores,
                 norm=c.norm,
@@ -136,8 +136,7 @@ def run_cli(args: argparse.Namespace):
                 normalization_template=Path(c.normalization_template),
                 only_feature_extraction=c.only_feature_extraction,
                 keep_dir_structure=c.keep_dir_structure if 'keep_dir_structure' in c else False,
-                # patch_size=c.patch_size, 256
-                # batch_size = 64,
+                batch_size = c.batch_size if 'batch_size' in c else 64,
                 device=c.device
             ) 
         case "train":

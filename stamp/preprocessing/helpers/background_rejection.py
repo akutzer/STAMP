@@ -1,6 +1,7 @@
 import time
 from typing import Dict, Tuple
 from concurrent import futures
+import logging
 import numpy as np
 import cv2
 import PIL
@@ -30,8 +31,6 @@ def filter_background(
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Returns the patches which do not only contain background."""
     n = len(patches)
-    print(f"\nCanny background rejection...")
-
     begin = time.time()
     has_tissue = np.zeros((n,), dtype=bool)
     with futures.ThreadPoolExecutor(cores) as executor:
@@ -48,5 +47,5 @@ def filter_background(
     patches = patches[has_tissue]
     patches_coords = patches_coords[has_tissue]
 
-    print(f"Finished Canny background rejection, rejected {np.sum(~has_tissue)}/{n} tiles ({time.time()-begin:.2f} seconds)")
+    logging.info(f"Finished Canny background rejection, rejected {np.sum(~has_tissue)}/{n} tiles ({time.time()-begin:.2f} seconds)")
     return patches, patches_coords

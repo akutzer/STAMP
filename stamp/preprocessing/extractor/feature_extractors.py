@@ -6,13 +6,14 @@ import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 from torchvision.transforms import v2 as transforms
+from torchvision.transforms import ToTensor
 import numpy as np
 import h5py
 from tqdm import tqdm
 import os
 import uni
 
-from .swin_transformer import swin_tiny_patch4_window7_224, ConvStem
+from stamp.preprocessing.extractor.swin_transformer import swin_tiny_patch4_window7_224, ConvStem
 
 
 __version__ = "1.0.3_15-04-2024"
@@ -38,7 +39,7 @@ class FeatureExtractor:
         self.name = f"STAMP-extract-{__version__}_{model_name}"
 
         self.model = model
-        self.model = self.model.to(device)
+        self.model.to(device)
         self.model.eval()
         self.transform = transform
 
@@ -60,10 +61,10 @@ class FeatureExtractor:
         model.load_state_dict(ctranspath_weights["model"], strict=True)
 
         transform = transforms.Compose([
-            transforms.ToImage(),  # Convert to tensor, only needed for PIL images
+            transforms.ToImage(),  # convert to tensor, only needed for PIL images
             transforms.ToDtype(torch.uint8, scale=True),  # optional, most input are already uint8 at this point
             transforms.Resize(size=(224, 224), antialias=True),
-            transforms.ToDtype(torch.float32, scale=True),  # Normalize expects float input
+            transforms.ToDtype(torch.float32, scale=True),  # normalize expects float input
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]), # ImageNet normalization
         ])
 
@@ -92,6 +93,11 @@ class FeatureExtractor:
 
         # initializing the model and updating the weights
         model, transform = uni.get_encoder(enc_name="uni", device=device, assets_dir=asset_dir, center_crop=False, **kwargs)
+        # UNI implementations still uses transformsV1, which expects
+        # either a PILImage or Tensor as input, not a numpy array like in the current code,
+        # thus we have to move the ToTensor transform to the beginning 
+        transform.transforms = list(filter(lambda x: not isinstance(x, ToTensor), transform.transforms))
+        transform.transforms.insert(0, ToTensor())
 
         extractor = cls(model, model_name, transform, device)
         print("UNI model successfully initialized...\n")

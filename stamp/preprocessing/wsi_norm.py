@@ -76,7 +76,6 @@ def save_image(image, path: Path):
     image.save(path)
 
 
-# downstream:
 def preprocess(output_dir: Path, wsi_dir: Path, model_path: Path, cache_dir: Path,
                cache: bool = False, norm: bool = False, normalization_template: Optional[Path] = None,
                del_slide: bool = False, only_feature_extraction: bool = False,
@@ -84,22 +83,7 @@ def preprocess(output_dir: Path, wsi_dir: Path, model_path: Path, cache_dir: Pat
                patch_size: int = 224, batch_size: int = 64, device: str = "cuda",
                feat_extractor: str = "ctp"
                ):
-#     target_mpp = target_microns / patch_size
-#     patch_size = (patch_size, patch_size) # (224, 224) by default
 
-#     # Initialize the feature extraction model
-#     print(f"Initializing CTransPath model as feature extractor...")
-#     has_gpu = torch.cuda.is_available()
-#     device = torch.device(device) if "cuda" in device and has_gpu else torch.device("cpu")
-#     extractor = FeatureExtractor.from_checkpoint(checkpoint_path=model_path, device=device)
-
-#     # Create output and cache directories
-    
-
-# def preprocess(output_dir: Path, wsi_dir: Path, model_path: Path, cache_dir: Path, norm: bool,
-#                del_slide: bool, only_feature_extraction: bool, cache: bool = True, cores: int = 8,
-#                target_microns: int = 256, patch_size: int = 224, keep_dir_structure: bool = False,
-#                device: str = "cuda", normalization_template: Path = None, feat_extractor: str = "ctp"):
     # Clean up potentially old leftover .lock files
     for lockfile in wsi_dir.glob("**/*.lock"):
         if time.time() - os.path.getmtime(lockfile) > 20:
@@ -108,19 +92,16 @@ def preprocess(output_dir: Path, wsi_dir: Path, model_path: Path, cache_dir: Pat
     target_mpp = target_microns / patch_size
     patch_size = (patch_size, patch_size) # (224, 224) by default
 
-
     # Initialize the feature extraction model
     print(f"Initialising feature extractor {feat_extractor}...")
     has_gpu = torch.cuda.is_available()
     device = torch.device(device) if "cuda" in device and has_gpu else torch.device("cpu")
-    # extractor = FeatureExtractor.from_checkpoint(checkpoint_path=model_path, device=device)
     if feat_extractor == "ctp":
         extractor = FeatureExtractor.init_ctranspath(model_path, device)
     elif feat_extractor == "uni":
         extractor = FeatureExtractor.init_uni(device)
     else:
         raise Exception(f"Invalid feature extractor '{feat_extractor}' selected")
-    # model_name = extractor.init_feat_extractor(device=device)
 
     # Create cache and output directories
     if cache:
@@ -152,8 +133,9 @@ def preprocess(output_dir: Path, wsi_dir: Path, model_path: Path, cache_dir: Pat
 
     if norm:
         assert normalization_template is not None, "`normalization_template` can't be None if `norm`=True"
-        print("\nInitializing Macenko normalizer...")
-        print(f"Reference: {normalization_template}")
+        print("")
+        logging.info("Initializing Macenko normalizer...")
+        logging.info(f"Reference: {normalization_template}")
         target = Image.open(normalization_template).convert("RGB")
         normalizer = MacenkoNormalizer().fit(np.array(target))
 
@@ -161,7 +143,7 @@ def preprocess(output_dir: Path, wsi_dir: Path, model_path: Path, cache_dir: Pat
     img_name = "norm_slide.jpg" if norm else "canny_slide.jpg"
 
     # Get list of slides, filter out slides that have already been processed
-    print("Scanning for existing feature files...")
+    logging.info("Scanning for existing feature files...")
     existing = [f.stem for f in output_file_dir.glob("**/*.h5")] if output_file_dir.exists() else []
     if not only_feature_extraction:
         img_dir = [svs for ext in supported_extensions for svs in wsi_dir.glob(f"**/*{ext}")]
@@ -179,7 +161,7 @@ def preprocess(output_dir: Path, wsi_dir: Path, model_path: Path, cache_dir: Pat
     num_processed, num_total = 0, len(img_dir) + len(existing)
     error_slides = []
     if len(existing):
-        print(f"For {len(existing)} out of {num_total} slides in the wsi directory feature files were found, skipping these slides...")
+        logging.info(f"For {len(existing)} out of {num_total} slides in the wsi directory feature files were found, skipping these slides...")
     for slide_url in tqdm(img_dir, "\nPreprocessing progress", leave=False, miniters=1, mininterval=0):
         slide_name = slide_url.stem if not only_feature_extraction else slide_url.parent.name
         slide_cache_dir = cache_dir/slide_name
@@ -201,7 +183,7 @@ def preprocess(output_dir: Path, wsi_dir: Path, model_path: Path, cache_dir: Pat
                 ):
                     slide_array = np.array(Image.open(slide_jpg))
                     patches, patches_coords, n = extract_patches(slide_array, patch_size, pad=False, drop_empty=True, overlap=False)
-                    print(f"Loaded {img_name}, {patches.shape[0]}/{n} tiles remain")
+                    logging.info(f"Loaded {img_name}, {patches.shape[0]}/{n} tiles remain")
                     # note that due to being stored as an JPEG rejected patches which
                     # neighbor accepted patches will most likely also be loaded
                     # thus we again apply a background filtering
@@ -240,7 +222,7 @@ def preprocess(output_dir: Path, wsi_dir: Path, model_path: Path, cache_dir: Pat
                     del slide   # Remove .SVS from memory
 
                     print(f" Loaded slide ({time.time() - start_loading:.2f} seconds)")
-                    print(f"Size of WSI: {slide_array.shape}")
+                    logging.info(f"Size of WSI: {slide_array.shape}")
                         
                     if cache:   # Save raw .svs jpg
                         raw_image = Image.fromarray(slide_array)
@@ -248,6 +230,7 @@ def preprocess(output_dir: Path, wsi_dir: Path, model_path: Path, cache_dir: Pat
 
                     # Canny edge detection to discard tiles containing no tissue BEFORE normalization
                     patches, patches_coords, _ = extract_patches(slide_array, patch_size, pad=False, drop_empty=True, overlap=False)
+                    print(f"\nCanny background rejection...")
                     patches, patches_coords = filter_background(patches, patches_coords, cores)
                     # patches.shape = (n_patches, patch_h, patch_w, 3)
                     # patches_coords.shape = (n_patches, 2)
@@ -296,7 +279,7 @@ def preprocess(output_dir: Path, wsi_dir: Path, model_path: Path, cache_dir: Pat
                     logging.info(f" Extracted features from slide: {time.time() - start_time:.2f} seconds ({features.shape[0]} tiles)")
                     num_processed += 1
                 else:
-                    logging.error(" 0 tiles remain to extract features from after pre-processing. Continuing...")
+                    logging.warning("No tiles remain for feature extraction after pre-processing. Continuing...")
                     error_slides.append(slide_name)
                     continue
         else:
@@ -310,7 +293,7 @@ def preprocess(output_dir: Path, wsi_dir: Path, model_path: Path, cache_dir: Pat
                 if os.path.exists(slide_url):
                     os.remove(slide_url)
 
-    logging.info(f"\n===== End-to-end processing time of {num_total} slides: {str(timedelta(seconds=(time.time() - total_start_time)))} =====")
+    logging.info(f"\n\n\n===== End-to-end processing time of {num_total} slides: {str(timedelta(seconds=(time.time() - total_start_time)))} =====")
     logging.info(f"Summary: Processed {num_processed} slides, encountered {len(error_slides)} errors, skipped {len(existing)} readily-processed slides")
     if len(error_slides):
         logging.info("The following slides were not processed due to errors:\n  " + "\n  ".join(error_slides))
