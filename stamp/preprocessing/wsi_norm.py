@@ -23,13 +23,6 @@ import torch
 from .normalizer.normalizer import MacenkoNormalizer
 from .extractor.feature_extractors import FeatureExtractor, store_features, store_metadata
 from .helpers.common import supported_extensions
-
-# upstream:
-# from .helpers.concurrent_canny_rejection import reject_background
-# from .helpers.loading_slides import process_slide_jpg, load_slide, get_raw_tile_list
-# from .helpers.feature_extractors import FeatureExtractorCTP, FeatureExtractorUNI, extract_features_
-
-# downstream:
 from .helpers.exceptions import MPPExtractionError
 from .helpers.load_slides import load_slide
 from .helpers.load_patches import extract_patches, reconstruct_from_patches

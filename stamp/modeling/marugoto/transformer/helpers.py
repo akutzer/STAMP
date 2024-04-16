@@ -68,21 +68,8 @@ def train_categorical_model_(
         print(f'{model_path} already exists. Skipping...')
         return
 
-    clini_df = pd.read_csv(clini_table, dtype=str) if Path(clini_table).suffix == '.csv' else pd.read_excel(clini_table, dtype=str)
-    slide_df = pd.read_csv(slide_table, dtype=str) if Path(slide_table).suffix == '.csv' else pd.read_excel(slide_table, dtype=str)
- 
-    df = clini_df.merge(slide_df, on='PATIENT')
-
-    # filter na, infer categories if not given
-    df = df.dropna(subset=target_label)
-
-    # TODO move into get_cohort_df
-    if not categories:
-        categories = df[target_label].unique()
-    categories = np.array(categories)
+    df, categories = get_cohort_df(clini_table, slide_table, feature_dir, target_label, categories)
     info['categories'] = list(categories)
-
-    df = get_cohort_df(clini_table, slide_table, feature_dir, target_label, categories)
 
     print('Overall distribution')
     print(df[target_label].value_counts())
@@ -188,7 +175,7 @@ def deploy_categorical_model_(
     cat_labels = cat_labels or learn.cat_labels
     cont_labels = cont_labels or learn.cont_labels
 
-    test_df = get_cohort_df(clini_table, slide_table, feature_dir, target_label, categories)
+    test_df, categories = get_cohort_df(clini_table, slide_table, feature_dir, target_label, categories)
 
     patient_preds_df = deploy(test_df=test_df, learn=learn, target_label=target_label)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -234,29 +221,8 @@ def categorical_crossval_(
         'n_splits': n_splits,
         'datetime': datetime.now().astimezone().isoformat()}
 
-    clini_df = pd.read_csv(clini_table, dtype=str) if Path(clini_table).suffix == '.csv' else pd.read_excel(clini_table, dtype=str)
-    slide_df = pd.read_csv(slide_table, dtype=str) if Path(slide_table).suffix == '.csv' else pd.read_excel(slide_table, dtype=str)
-
-
-    if 'PATIENT' not in clini_df.columns:
-        raise ValueError("The PATIENT column is missing in the clini_table.\n\
-                         Please ensure the patient identifier column is named PATIENT.")
-    
-    if 'PATIENT' not in slide_df.columns:
-        raise ValueError("The PATIENT column is missing in the slide_table.\n\
-                         Please ensure the patient identifier column is named PATIENT.")
-
-    df = clini_df.merge(slide_df, on='PATIENT')
-
-    # filter na, infer categories if not given
-    df = df.dropna(subset=target_label)
-
-    if not categories:
-        categories = df[target_label].unique()
-    categories = np.array(categories)
+    df, categories = get_cohort_df(clini_table, slide_table, feature_dir, target_label, categories)
     info['categories'] = list(categories)
-
-    df = get_cohort_df(clini_table, slide_table, feature_dir, target_label, categories)
 
     info['class distribution'] = {'overall': {
         k: int(v) for k, v in df[target_label].value_counts().items()}}

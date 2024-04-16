@@ -313,6 +313,13 @@ def get_cohort_df(
         clini_df = clini_df.drop(columns=['FILENAME'])
     
     df = clini_df.merge(slide_df, on='PATIENT')
+
+    # filter na and infer categories if not given
+    df = df.dropna(subset=target_label)
+    if not categories:
+        categories = df[target_label].unique()
+    categories = np.array(categories)
+
     # remove uninteresting
     df = df[df[target_label].isin(categories)]
     # remove slides we don't have
@@ -327,4 +334,5 @@ def get_cohort_df(
     patient_slides = df.groupby('PATIENT').slide_path.apply(list)
     df = patient_df.merge(patient_slides, left_on='PATIENT', right_index=True).reset_index()
 
-    return df
+    return df, categories
+    
