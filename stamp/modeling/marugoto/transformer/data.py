@@ -190,7 +190,7 @@ class BagDataset(Dataset):
 
 def _to_fixed_size_bag(bag: torch.Tensor, bag_size: int = 512) -> Tuple[torch.Tensor, int]:
     # get up to bag_size elements
-    bag_idxs = torch.randperm(bag.shape[0])[:bag_size]
+    bag_idxs = torch.sort(torch.randperm(bag.shape[0])[:bag_size]).values
     bag_samples = bag[bag_idxs]
 
     # zero-pad if we don't have enough samples
@@ -316,7 +316,7 @@ def get_cohort_df(
 
     # filter na and infer categories if not given
     df = df.dropna(subset=target_label)
-    if not categories:
+    if categories is None or len(categories) == 0:
         categories = df[target_label].unique()
     categories = np.array(categories)
 

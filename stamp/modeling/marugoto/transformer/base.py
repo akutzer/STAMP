@@ -6,7 +6,8 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 from fastai.vision.all import (
-    Learner, DataLoader, DataLoaders, RocAuc,
+    Learner, DataLoader, DataLoaders, RocAuc, RocAucMulti, F1ScoreMulti,
+    PrecisionMulti, RecallMulti, AccumMetric, accuracy_multi,
     SaveModelCallback, CSVLogger, EarlyStoppingCallback)
 import pandas as pd
 import numpy as np
@@ -28,8 +29,9 @@ def train(
     add_features: Iterable[Tuple[SKLearnEncoder, Sequence[Any]]] = [],
     valid_idxs: np.ndarray,
     n_epoch: int = 32,
-    patience: int = 16,
+    patience: int = 10,
     path: Optional[Path] = None,
+    cores: int = 8,
 ) -> Learner:
     """Train a MLP on image features.
 
@@ -39,6 +41,8 @@ def train(
         add_features:  An (encoder, targets) pair for each additional input.
         valid_idxs:  Indices of the datasets to use for validation.
     """
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
     target_enc, targs = targets
     train_ds = make_dataset(
         bags=bags[~valid_idxs],
@@ -46,7 +50,7 @@ def train(
         add_features=[
             (enc, vals[~valid_idxs])
             for enc, vals in add_features],
-        bag_size=512)
+        bag_size=1024)
 
     valid_ds = make_dataset(
         bags=bags[valid_idxs],
@@ -55,21 +59,26 @@ def train(
             (enc, vals[valid_idxs])
             for enc, vals in add_features],
         bag_size=None)
+    
 
     # build dataloaders
     train_dl = DataLoader(
-        train_ds, batch_size=64, shuffle=True, num_workers=1, drop_last=True)
+        train_ds, batch_size=64, shuffle=True, num_workers=cores, drop_last=True,
+        device=device, pin_memory=device.type == "cuda"
+    )
     valid_dl = DataLoader(
-        valid_ds, batch_size=1, shuffle=False, num_workers=1)
+        valid_ds, batch_size=1, shuffle=False, num_workers=cores,
+        device=device, pin_memory=device.type == "cuda"
+    )
     batch = train_dl.one_batch()
     feature_dim=batch[0].shape[-1]
+
     # for binary classification num_classes=2
-    model = ViT(num_classes=len(target_enc.categories_[0]), input_dim=feature_dim) # Transformer(num_classes=2)
-    model.to(torch.device('cuda' if torch.cuda.is_available() else 'cpu')) #
+    model = ViT(num_classes=len(target_enc.categories_[0]), input_dim=feature_dim, dim=512)
+    model.to(device)
 
     # weigh inversely to class occurances
     counts = pd.Series(targs[~valid_idxs]).value_counts()
-
     weight = counts.sum() / counts
     weight /= weight.sum()
     # reorder according to vocab
@@ -77,17 +86,21 @@ def train(
         list(map(weight.get, target_enc.categories_[0])), dtype=torch.float32)
     loss_func = nn.CrossEntropyLoss(weight=weight)
 
-    dls = DataLoaders(train_dl, valid_dl, device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')) #
-    learn = Learner(dls, model, loss_func=loss_func,
-                    metrics=[RocAuc()], path=path)
+    dls = DataLoaders(train_dl, valid_dl, device=device) #
+    learn = Learner(
+        dls,
+        model,
+        loss_func=loss_func,
+        metrics=[RocAuc(average='macro')],
+        path=path,
+    )
 
     cbs = [
-        SaveModelCallback(fname=f'best_valid'),
-        EarlyStoppingCallback(monitor='roc_auc_score',
-                             min_delta=0.01, patience=patience),
+        SaveModelCallback(monitor='valid_loss', fname=f'best_valid'),
+        EarlyStoppingCallback(monitor='valid_loss', patience=patience),
         CSVLogger()]
 
-    learn.fit_one_cycle(n_epoch=n_epoch, lr_max=1e-4, cbs=cbs)
+    learn.fit_one_cycle(n_epoch=n_epoch, lr_max=1e-4, wd=1e-6, cbs=cbs)
 
     return learn
 
@@ -96,6 +109,7 @@ def deploy(
     test_df: pd.DataFrame, learn: Learner, *,
     target_label: Optional[str] = None,
     cat_labels: Optional[Sequence[str]] = None, cont_labels: Optional[Sequence[str]] = None,
+    cores: int = 8
 ) -> pd.DataFrame:
     assert test_df.PATIENT.nunique() == len(test_df), 'duplicate patients!'
     #assert (len(add_label)
@@ -122,7 +136,7 @@ def deploy(
         bag_size=None)
 
     test_dl = DataLoader(
-        test_ds, batch_size=1, shuffle=False, num_workers=1)
+        test_ds, batch_size=1, shuffle=False, num_workers=cores)
 
     #removed softmax in forward, but add here to get 0-1 probabilities
     patient_preds, patient_targs = learn.get_preds(dl=test_dl, act=nn.Softmax(dim=1))

@@ -33,6 +33,7 @@ def train_categorical_model_(
     cat_labels: Sequence[str] = [],
     cont_labels: Sequence[str] = [],
     categories: Optional[Iterable[str]] = None,
+    cores=8,
 ) -> None:
     """Train a categorical model on a cohort's tile's features.
 
@@ -103,6 +104,7 @@ def train_categorical_model_(
         add_features=add_features,
         valid_idxs=df.PATIENT.isin(valid_patients).values,
         path=output_path,
+        cores=cores
     )
 
     # save some additional information to the learner to make deployment easier
@@ -149,6 +151,7 @@ def deploy_categorical_model_(
     target_label: Optional[str] = None,
     cat_labels: Optional[str] = None,
     cont_labels: Optional[str] = None,
+    cores=8,
 ) -> None:
     """Deploy a categorical model on a cohort's tile's features.
 
@@ -177,7 +180,7 @@ def deploy_categorical_model_(
 
     test_df, categories = get_cohort_df(clini_table, slide_table, feature_dir, target_label, categories)
 
-    patient_preds_df = deploy(test_df=test_df, learn=learn, target_label=target_label)
+    patient_preds_df = deploy(test_df=test_df, learn=learn, target_label=target_label, cores=cores)
     output_path.mkdir(parents=True, exist_ok=True)
     patient_preds_df.to_csv(preds_csv, index=False)
 
@@ -190,6 +193,7 @@ def categorical_crossval_(
     cont_labels: Sequence[str] = [],
     n_splits: int = 5,
     categories: Optional[Iterable[str]] = None,
+    cores=8,
 ) -> None:
     """Performs a cross-validation for a categorical target.
 
@@ -260,19 +264,20 @@ def categorical_crossval_(
             learn = _crossval_train(
                 fold_path=fold_path, fold_df=fold_train_df, fold=fold, info=info,
                 target_label=target_label, target_enc=target_enc,
-                cat_labels=cat_labels, cont_labels=cont_labels)
+                cat_labels=cat_labels, cont_labels=cont_labels, cores=cores)
             learn.export()
 
         fold_test_df = df.iloc[test_idxs]
         fold_test_df.drop(columns='slide_path').to_csv(fold_path/'test.csv', index=False)
         patient_preds_df = deploy(
             test_df=fold_test_df, learn=learn,
-            target_label=target_label, cat_labels=cat_labels, cont_labels=cont_labels)
+            target_label=target_label, cat_labels=cat_labels, cont_labels=cont_labels,
+            cores=cores)
         patient_preds_df.to_csv(preds_csv, index=False)
 
 
 def _crossval_train(
-    *, fold_path, fold_df, fold, info, target_label, target_enc, cat_labels, cont_labels
+    *, fold_path, fold_df, fold, info, target_label, target_enc, cat_labels, cont_labels, cores=8
 ):
     """Helper function for training the folds."""
     assert fold_df.PATIENT.nunique() == len(fold_df)
@@ -302,7 +307,8 @@ def _crossval_train(
         targets=(target_enc, fold_df[target_label].values),
         add_features=add_features,
         valid_idxs=fold_df.PATIENT.isin(valid_patients),
-        path=fold_path)
+        path=fold_path,
+        cores=cores)
     learn.target_label = target_label
     learn.cat_labels, learn.cont_labels = cat_labels, cont_labels
 

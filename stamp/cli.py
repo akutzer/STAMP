@@ -154,7 +154,8 @@ def run_cli(args: argparse.Namespace):
                                      target_label=c.target_label, 
                                      cat_labels=c.cat_labels,
                                      cont_labels=c.cont_labels, 
-                                     categories=c.categories)
+                                     categories=c.categories,
+                                     cores=c.cores  if 'cores' in c else 8)
         case "crossval":
             require_configs(
                 cfg,
@@ -171,7 +172,8 @@ def run_cli(args: argparse.Namespace):
                                   cat_labels=c.cat_labels,
                                   cont_labels=c.cont_labels,
                                   categories=c.categories,
-                                  n_splits=c.n_splits)
+                                  n_splits=c.n_splits,
+                                  cores=c.cores  if 'cores' in c else 8)
         case "deploy":
             require_configs(
                 cfg,
@@ -187,7 +189,8 @@ def run_cli(args: argparse.Namespace):
                                       target_label=c.target_label,
                                       cat_labels=c.cat_labels,
                                       cont_labels=c.cont_labels,
-                                      model_path=Path(c.model_path))
+                                      model_path=Path(c.model_path),
+                                      cores=c.cores  if 'cores' in c else 8)
         case "statistics":
             require_configs(
                 cfg,
