@@ -6,14 +6,13 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 from fastai.vision.all import (
-    Learner, DataLoader, DataLoaders, RocAuc, RocAucMulti, F1ScoreMulti,
-    PrecisionMulti, RecallMulti, AccumMetric, accuracy_multi,
+    Learner, DataLoader, DataLoaders, RocAuc,
     SaveModelCallback, CSVLogger, EarlyStoppingCallback)
 import pandas as pd
 import numpy as np
 
 from .data import make_dataset, SKLearnEncoder
-from .ViT import ViT
+from .TransMIL import TransMIL
 
 
 __all__ = ['train', 'deploy']
@@ -60,10 +59,10 @@ def train(
             for enc, vals in add_features],
         bag_size=None)
     
-
     # build dataloaders
+    batch_size = 64
     train_dl = DataLoader(
-        train_ds, batch_size=64, shuffle=True, num_workers=cores, drop_last=True,
+        train_ds, batch_size=batch_size, shuffle=True, num_workers=cores, drop_last=len(train_ds) > batch_size,
         device=device, pin_memory=device.type == "cuda"
     )
     valid_dl = DataLoader(
@@ -74,7 +73,7 @@ def train(
     feature_dim=batch[0].shape[-1]
 
     # for binary classification num_classes=2
-    model = ViT(num_classes=len(target_enc.categories_[0]), input_dim=feature_dim, dim=512)
+    model = TransMIL(num_classes=len(target_enc.categories_[0]), input_dim=feature_dim, dim=512)
     model.to(device)
 
     # weigh inversely to class occurances
