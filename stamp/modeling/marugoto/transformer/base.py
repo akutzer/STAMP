@@ -57,7 +57,7 @@ def train(
         add_features=[
             (enc, vals[valid_idxs])
             for enc, vals in add_features],
-        bag_size=1024)
+        bag_size=None)
     
     # build dataloaders
     batch_size = 64
@@ -70,7 +70,7 @@ def train(
         device=device, pin_memory=device.type == "cuda"
     )
     batch = train_dl.one_batch()
-    feature_dim=batch[0].shape[-1]
+    feature_dim = batch[0].shape[-1]
 
     # for binary classification num_classes=2
     model = TransMIL(num_classes=len(target_enc.categories_[0]), input_dim=feature_dim, dim=512, mlp_dim=768)
@@ -84,7 +84,7 @@ def train(
     weight /= weight.sum()
     # reorder according to vocab
     weight = torch.tensor(
-        list(map(weight.get, target_enc.categories_[0])), dtype=torch.float32)
+        list(map(weight.get, target_enc.categories_[0])), dtype=torch.float32, device=device)
     loss_func = nn.CrossEntropyLoss(weight=weight)
 
     dls = DataLoaders(train_dl, valid_dl, device=device) #
@@ -100,7 +100,7 @@ def train(
         SaveModelCallback(monitor='valid_loss', fname=f'best_valid'),
         EarlyStoppingCallback(monitor='valid_loss', patience=patience),
         CSVLogger()]
-
+    
     learn.fit_one_cycle(n_epoch=n_epoch, lr_max=1e-4, wd=1e-6, cbs=cbs)
 
     return learn

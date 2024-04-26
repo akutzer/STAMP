@@ -98,7 +98,8 @@ class TransMIL(nn.Module):
         self.cls_token = nn.Parameter(torch.randn(dim))
         self.pos_emb_density = pos_emb_density
         self.pos_emb = nn.Parameter(torch.randn(pos_emb_density, pos_emb_density, dim))
-        self.slide_emb = self.sinusoid_encoding(25, dim)
+        #  slide embedding only allows 25 slides per patient
+        self.register_buffer("slide_emb", self.sinusoid_encoding(25, dim))
 
         self.fc = nn.Sequential(nn.Linear(input_dim, dim, bias=True), nn.GELU())
         self.dropout = nn.Dropout(emb_dropout)
@@ -111,15 +112,19 @@ class TransMIL(nn.Module):
         )
 
     def forward(self, x, lens, slide_ids, coords):
-        x = x[:, :torch.amax(lens)] # remove unnecessary padding
+        # remove unnecessary padding
+        max_idx = torch.amax(lens)
+        x, slide_ids, coords = x[:, :max_idx], slide_ids[:, :max_idx], coords[:, :max_idx] 
         b, n, d = x.shape
 
         # map input sequence to latent space of TransMIL
         x = self.dropout(self.fc(x))
 
-        # positional embedding
-        pos_emb = self.interpolate(coords)
-        self.slide_emb = self.slide_emb.to(slide_ids.device)
+        # apply positional embedding
+        # note: feature vectors added during zero padding get assigned the embedding
+        # for the top left patch, however they are masked out in the transformer,
+        # thus they don't influence the gradient of this embedding vector
+        pos_emb = self.bilinear_interp(coords)
         slide_emb = self.slide_emb[slide_ids]
         x = x + pos_emb + slide_emb
 
@@ -127,6 +132,7 @@ class TransMIL(nn.Module):
         x = torch.cat((cls_tokens, x), dim=1)
         lens = lens + 1 # account for cls token
 
+        # mask indicating zero padded feature vectors
         mask = None
         if torch.amin(lens) != torch.amax(lens):
             mask = torch.arange(0, torch.max(lens), dtype=torch.int32, device=x.device).repeat(b, 1) < lens[..., None]
@@ -143,7 +149,11 @@ class TransMIL(nn.Module):
 
         return self.mlp_head(x)
 
-    def interpolate(self, coords):
+    def bilinear_interp(self, coords):
+        """
+        Bilinear interpolation for getting the positional embeddings for each
+        patch from the learnable pos. embedding matrix.
+        """
         (b, l), d = coords.shape[:2], self.pos_emb.shape[-1]
         coords = coords.reshape(-1, 2)
         device = coords.device
@@ -156,7 +166,8 @@ class TransMIL(nn.Module):
         ], dtype=torch.int32, device=device)
 
         coords = coords * (self.pos_emb_density - 1)
-        corner_idcs = torch.floor(coords - 1e-6).to(device, torch.int32).unsqueeze(1) + offset
+        corner_idcs = torch.floor(coords).to(device, torch.int32).unsqueeze(1) + offset
+        corner_idcs.clip_(0, self.pos_emb_density - 1)
 
         corner_idcs = corner_idcs.reshape(-1, 2)
         corners = self.pos_emb[corner_idcs[:, 0], corner_idcs[:, 1]]
@@ -171,9 +182,15 @@ class TransMIL(nn.Module):
         return interp.reshape(b, l, d)
 
     def sinusoid_encoding(self, num_tokens, token_len):
+        """
+        Sinusoidal embedding used for distinguishing between patches of different slides.
+        """
         position_angle_vec = 1 / torch.pow(100, 2 * (torch.arange(token_len) // 2) / token_len)
         sinusoid_table = torch.outer(torch.arange(num_tokens), position_angle_vec)
         sinusoid_table[:, 0::2] = torch.sin(sinusoid_table[:, 0::2])
         sinusoid_table[:, 1::2] = torch.cos(sinusoid_table[:, 1::2])
+
+        sinusoid_table.sub_(sinusoid_table.mean(axis=-1, keepdim=True))
+        sinusoid_table.div_(sinusoid_table.std(axis=-1, keepdim=True))
 
         return sinusoid_table

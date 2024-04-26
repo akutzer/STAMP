@@ -178,10 +178,10 @@ class BagDataset(Dataset):
         feats = []
         coords = []
         slide_ids = []
-        for i, bag_file in enumerate(self.bags[index], start=1):
+        for i, bag_file in enumerate(self.bags[index]):
             with h5py.File(bag_file, 'r') as f:
                 feats.append(torch.from_numpy(f['feats'][:]))
-                coords.append(torch.from_numpy(f['coords'][:].astype(np.int32)))
+                coords.append(torch.from_numpy(f['coords'][:][..., ::-1].astype(np.int32))) # convert (w, h) -> (h, w)
                 slide_ids.append(torch.zeros(f['feats'][:].shape[0]) + i)
 
         feats = torch.concat(feats).float()
