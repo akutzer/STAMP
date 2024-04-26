@@ -75,7 +75,8 @@ def train(
     # for binary classification num_classes=2
     model = TransMIL(num_classes=len(target_enc.categories_[0]), input_dim=feature_dim, dim=512, mlp_dim=768)
     model.to(device)
-    print(f"{model}  [parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad)}]")
+    print(f"Model: {model}", end=" ")
+    print(f"[Parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad)}]")
 
     # weigh inversely to class occurances
     counts = pd.Series(targs[~valid_idxs]).value_counts()
@@ -135,11 +136,10 @@ def deploy(
         add_features=add_features,
         bag_size=None)
 
-    test_dl = DataLoader(
-        test_ds, batch_size=1, shuffle=False, num_workers=cores)
+    test_dl = DataLoader(test_ds, batch_size=1, shuffle=False, num_workers=cores)
 
     #removed softmax in forward, but add here to get 0-1 probabilities
-    patient_preds, patient_targs = learn.get_preds(dl=test_dl, act=nn.Softmax(dim=1))
+    patient_preds, patient_targs = learn.get_preds(dl=test_dl, act=nn.Softmax(dim=-1))
 
     # make into DF w/ ground truth
     patient_preds_df = pd.DataFrame.from_dict({
