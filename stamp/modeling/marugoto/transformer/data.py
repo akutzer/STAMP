@@ -176,27 +176,51 @@ class BagDataset(Dataset):
     def __getitem__(self, index: int) -> Tuple[torch.Tensor, int]:
         # collect all the features
         feats = []
-        for bag_file in self.bags[index]:
+        coords = []
+        slide_ids = []
+        for i, bag_file in enumerate(self.bags[index], start=1):
             with h5py.File(bag_file, 'r') as f:
                 feats.append(torch.from_numpy(f['feats'][:]))
+                coords.append(torch.from_numpy(f['coords'][:].astype(np.int32)))
+                slide_ids.append(torch.zeros(f['feats'][:].shape[0]) + i)
+
         feats = torch.concat(feats).float()
+        slide_ids = torch.concat(slide_ids).to(torch.int64)
+        coords = torch.concat(coords)
+
+        # min-max normalize coords
+        coords -= coords.amin(axis=0, keepdim=True)
+        coords = coords / (1e-8 + coords.amax(axis=0, keepdim=True))
 
         # sample a subset, if required
         if self.bag_size:
-            return _to_fixed_size_bag(feats, bag_size=self.bag_size)
+            return _to_fixed_size_bag(feats, slide_ids, coords, bag_size=self.bag_size)
         else:
-            return feats, len(feats)
+            return feats, len(feats), slide_ids, coords
 
 
-def _to_fixed_size_bag(bag: torch.Tensor, bag_size: int = 512) -> Tuple[torch.Tensor, int]:
+def _to_fixed_size_bag(bag: torch.Tensor, slide_ids: torch.Tensor, coords: torch.Tensor, bag_size: int = 512) -> Tuple[torch.Tensor, int]:
     # get up to bag_size elements
     bag_idxs = torch.sort(torch.randperm(bag.shape[0])[:bag_size]).values
     bag_samples = bag[bag_idxs]
+    slide_id_samples = slide_ids[bag_idxs]
+    coords_sample = coords[bag_idxs]
+
 
     # zero-pad if we don't have enough samples
-    zero_padded = torch.cat((bag_samples,
-                             torch.zeros(bag_size-bag_samples.shape[0], bag_samples.shape[1])))
-    return zero_padded, min(bag_size, len(bag))
+    bag_samples = torch.cat((
+        bag_samples,
+        torch.zeros(bag_size-bag_samples.shape[0], bag_samples.shape[1])
+    ))
+    slide_id_samples = torch.cat((
+        slide_id_samples,
+        torch.zeros(bag_size-slide_id_samples.shape[0], dtype=slide_id_samples.dtype)
+    ))
+    coords_sample = torch.cat((
+        coords_sample,
+        torch.zeros(bag_size-coords_sample.shape[0], coords_sample.shape[1])
+    ))
+    return bag_samples, min(bag_size, len(bag)), slide_id_samples, coords_sample
 
 
 def make_dataset(
@@ -237,10 +261,8 @@ def _make_basic_dataset(
 
 
 def zip_bag_targ(bag, targets):
-    features, lengths = bag
     return (
-        features,
-        lengths,
+        *bag,
         targets.squeeze(),
     )
 
@@ -288,7 +310,7 @@ def _attach_add_to_bag_and_zip_with_targ(bag, add, targ):
             bag[0], # the bag's features
             add.repeat(bag[0].shape[0], 1)  # the additional features
         ], dim=1),
-        bag[1], # the bag's length
+        *bag[1:], # the bag's length, slide ids and normalized coords
         targ.squeeze(),   # the ground truth
     )
 

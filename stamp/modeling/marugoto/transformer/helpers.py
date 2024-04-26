@@ -119,7 +119,7 @@ def _make_cat_enc(df, cats) -> SKLearnEncoder:
     #
     # due to weirdeties in sklearn's OneHotEncoder.fit we fill NAs with other values
     # randomly sampled with the same probability as their distribution in the
-    # dataset.  This is necessary for correctly determining StandardScaler's weigth
+    # dataset.  This is necessary for correctly determining StandardScaler's weight
     fitting_cats = []
     for cat in cats:
         weights = df[cat].value_counts(normalize=True)

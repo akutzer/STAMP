@@ -57,7 +57,7 @@ def train(
         add_features=[
             (enc, vals[valid_idxs])
             for enc, vals in add_features],
-        bag_size=None)
+        bag_size=1024)
     
     # build dataloaders
     batch_size = 64
@@ -73,8 +73,9 @@ def train(
     feature_dim=batch[0].shape[-1]
 
     # for binary classification num_classes=2
-    model = TransMIL(num_classes=len(target_enc.categories_[0]), input_dim=feature_dim, dim=512)
+    model = TransMIL(num_classes=len(target_enc.categories_[0]), input_dim=feature_dim, dim=512, mlp_dim=768)
     model.to(device)
+    print(f"{model}  [parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad)}]")
 
     # weigh inversely to class occurances
     counts = pd.Series(targs[~valid_idxs]).value_counts()

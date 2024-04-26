@@ -5,7 +5,7 @@ In parts from https://github.com/lucidrains/vit-pytorch/blob/main/vit_pytorch/vi
 import torch
 from torch import nn
 import torch.nn.functional as F
-from einops import repeat, rearrange
+from einops import repeat, rearrange, einsum
 
 
 
@@ -22,7 +22,7 @@ class RMSNorm(nn.Module):
 class FeedForward(nn.Module):
     def __init__(self, dim, hidden_dim, norm_layer=nn.LayerNorm, dropout=0.):
         super().__init__()
-        self.net = nn.Sequential(
+        self.mlp = nn.Sequential(
             norm_layer(dim),
             nn.Linear(dim, hidden_dim),
             nn.GELU(),
@@ -32,7 +32,7 @@ class FeedForward(nn.Module):
         )
 
     def forward(self, x):
-        return self.net(x)
+        return self.mlp(x)
 
 
 class Attention(nn.Module):
@@ -57,18 +57,17 @@ class Attention(nn.Module):
 
         qkv = self.to_qkv(x).chunk(3, dim=-1)
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=self.heads), qkv)
-        dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale
+        dots = (q @ k.mT) * self.scale
 
         if mask is not None:
-            mask_value = -torch.finfo(dots.dtype).max
+            mask_value = torch.finfo(dots.dtype).min
             dots.masked_fill_(mask, mask_value)
 
         # improve numerical stability of softmax
         dots = dots - torch.amax(dots, dim=-1, keepdim=True)
-
         attn = F.softmax(dots, dim=-1)
 
-        out = torch.matmul(attn, v)
+        out = attn @ v
         out = rearrange(out, 'b h n d -> b n (h d)')
         return self.to_out(out)
 
@@ -92,11 +91,14 @@ class Transformer(nn.Module):
 
 
 class TransMIL(nn.Module):
-    def __init__(self, *, num_classes, input_dim=768, dim=512, depth=2, heads=8, mlp_dim=512, pool='cls',
-                 dim_head=64, dropout=0., emb_dropout=0.):
+    def __init__(self, *, num_classes, input_dim=768, dim=512, depth=2, heads=8, mlp_dim=2048, pool='cls',
+                 dim_head=64, dropout=0., emb_dropout=0., pos_emb_density: int = 10):
         super().__init__()
         assert pool in {'cls', 'mean'}, 'pool type must be either cls (cls token) or mean (mean pooling)'
-        self.cls_token = nn.Parameter(torch.randn(1, 1, dim))
+        self.cls_token = nn.Parameter(torch.randn(dim))
+        self.pos_emb_density = pos_emb_density
+        self.pos_emb = nn.Parameter(torch.randn(pos_emb_density, pos_emb_density, dim))
+        self.slide_emb = self.sinusoid_encoding(25, dim)
 
         self.fc = nn.Sequential(nn.Linear(input_dim, dim, bias=True), nn.GELU())
         self.dropout = nn.Dropout(emb_dropout)
@@ -108,22 +110,28 @@ class TransMIL(nn.Module):
             nn.Linear(dim, num_classes)
         )
 
-    def forward(self, x, lens):
+    def forward(self, x, lens, slide_ids, coords):
         x = x[:, :torch.amax(lens)] # remove unnecessary padding
         b, n, d = x.shape
 
         # map input sequence to latent space of TransMIL
         x = self.dropout(self.fc(x))
 
-        cls_tokens = repeat(self.cls_token, '1 1 d -> b 1 d', b=b)
+        # positional embedding
+        pos_emb = self.interpolate(coords)
+        self.slide_emb = self.slide_emb.to(slide_ids.device)
+        slide_emb = self.slide_emb[slide_ids]
+        x = x + pos_emb + slide_emb
+
+        cls_tokens = repeat(self.cls_token, 'd -> b 1 d', b=b)
         x = torch.cat((cls_tokens, x), dim=1)
         lens = lens + 1 # account for cls token
 
         mask = None
         if torch.amin(lens) != torch.amax(lens):
-            mask = torch.arange(0, torch.max(lens), dtype=torch.int32, device=x.device).repeat(b, 1) >= lens[..., None]
+            mask = torch.arange(0, torch.max(lens), dtype=torch.int32, device=x.device).repeat(b, 1) < lens[..., None]
             mask = mask[:, None, :, None].to(torch.float)
-            mask = (mask @ mask.mT).to(torch.bool)
+            mask = ~(mask @ mask.mT).to(torch.bool)
         
         x = self.transformer(x, mask)
 
@@ -133,5 +141,39 @@ class TransMIL(nn.Module):
         else:
             x = x.mean(dim=1) if self.pool == 'mean' else x[:, 0]
 
-        x = self.mlp_head(x)
-        return x
+        return self.mlp_head(x)
+
+    def interpolate(self, coords):
+        (b, l), d = coords.shape[:2], self.pos_emb.shape[-1]
+        coords = coords.reshape(-1, 2)
+        device = coords.device
+
+        offset = torch.tensor([
+            [0, 0], # upper left
+            [0, 1], # upper right
+            [1, 0], # lower left
+            [1, 1], # lower right
+        ], dtype=torch.int32, device=device)
+
+        coords = coords * (self.pos_emb_density - 1)
+        corner_idcs = torch.floor(coords - 1e-6).to(device, torch.int32).unsqueeze(1) + offset
+
+        corner_idcs = corner_idcs.reshape(-1, 2)
+        corners = self.pos_emb[corner_idcs[:, 0], corner_idcs[:, 1]]
+        corner_idcs = corner_idcs.reshape(-1, 4, 2)
+        corners = corners.reshape(-1, 2, 2, d)
+
+        in_cell_pos = coords - corner_idcs[:, 0]
+        del_x = torch.cat((1 - in_cell_pos[:, :1], in_cell_pos[:, :1]), dim=-1)
+        del_y = torch.cat((1 - in_cell_pos[:, 1:], in_cell_pos[:, 1:]), dim=-1)
+
+        interp = einsum(del_x, corners, del_y, "b h, b h w d, b w -> b d")
+        return interp.reshape(b, l, d)
+
+    def sinusoid_encoding(self, num_tokens, token_len):
+        position_angle_vec = 1 / torch.pow(100, 2 * (torch.arange(token_len) // 2) / token_len)
+        sinusoid_table = torch.outer(torch.arange(num_tokens), position_angle_vec)
+        sinusoid_table[:, 0::2] = torch.sin(sinusoid_table[:, 0::2])
+        sinusoid_table[:, 1::2] = torch.cos(sinusoid_table[:, 1::2])
+
+        return sinusoid_table
