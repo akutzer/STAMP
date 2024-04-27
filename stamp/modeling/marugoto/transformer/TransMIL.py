@@ -90,16 +90,89 @@ class Transformer(nn.Module):
         return self.norm(x)
 
 
+class InterpolationEmbedding2d(nn.Module): 
+    def __init__(self, dim: int, grid_size: int = 10):
+        super().__init__()
+        self.dim = dim
+        self.grid_size = grid_size
+        # self.embedding = nn.Parameter(torch.zeros(grid_size, grid_size, dim))
+        self.embedding = nn.Parameter(torch.randn(grid_size, grid_size, dim) * 1e-5)
+        self.register_buffer("offset", torch.tensor([
+                                                        [0, 0], # upper left
+                                                        [0, 1], # upper right
+                                                        [1, 0], # lower left
+                                                        [1, 1], # lower right
+                                                    ], dtype=torch.int32)
+        )
+    
+    def forward(self, coords):
+        """
+        Bilinear interpolation for getting the positional embeddings for each
+        patch from the learnable pos. embedding matrix.
+        """
+        (b, l), d = coords.shape[:2], self.dim
+        coords = coords.reshape(-1, 2)
+    
+        coords = coords * (self.grid_size - 1)
+        corner_idcs = torch.floor(coords).to(torch.int32).unsqueeze(1) + self.offset
+        corner_idcs.clip_(0, self.grid_size - 1)
+
+        corner_idcs = corner_idcs.reshape(-1, 2)
+        corners = self.embedding[corner_idcs[:, 0], corner_idcs[:, 1]]
+        corner_idcs = corner_idcs.reshape(-1, 4, 2)
+        corners = corners.reshape(-1, 2, 2, d)      
+
+        in_cell_pos = coords - corner_idcs[:, 0]
+        del_x = torch.cat((1 - in_cell_pos[:, :1], in_cell_pos[:, :1]), dim=-1)
+        del_y = torch.cat((1 - in_cell_pos[:, 1:], in_cell_pos[:, 1:]), dim=-1)
+        interp = einsum(del_x, corners, del_y, "b h, b h w d, b w -> b d")
+
+        return interp.reshape(b, l, d)
+    
+    def __repr__(self):
+        return f"InterpolationEmbedding2d(dim={self.dim}, grid_size={self.grid_size})"
+    
+
+class SinusoidEmbedding(nn.Module):
+    def __init__(self, num_tokens: int, dim: int, normalize: bool = True):
+        super().__init__()
+        self.num_tokens = num_tokens
+        self.dim = dim
+
+        position_angle_vec = 1 / torch.pow(100, 2 * (torch.arange(dim) // 2) / dim)
+        sinusoid_table = torch.outer(torch.arange(num_tokens), position_angle_vec)
+        sinusoid_table[:, 0::2] = torch.sin(sinusoid_table[:, 0::2])
+        sinusoid_table[:, 1::2] = torch.cos(sinusoid_table[:, 1::2])
+
+        if normalize:
+            sinusoid_table.sub_(sinusoid_table.mean(axis=-1, keepdim=True))
+            sinusoid_table.div_(sinusoid_table.std(axis=-1, keepdim=True))
+
+        self.register_buffer("embedding", sinusoid_table)
+    
+    def forward(self, token_ids):
+        return self.embedding[token_ids]
+
+    def __repr__(self):
+        return f"SinusoidEmbedding(num_tokens={self.num_tokens}, dim={self.dim})"
+
+
 class TransMIL(nn.Module):
-    def __init__(self, *, num_classes, input_dim=768, dim=512, depth=2, heads=8, mlp_dim=2048, pool='cls',
-                 dim_head=64, dropout=0., emb_dropout=0., pos_emb_density: int = 10):
+    def __init__(self, *, 
+        num_classes: int, input_dim: int = 768, dim: int = 512,
+        depth: int = 2, heads: int = 8, dim_head: int = 64, mlp_dim: int = 2048,
+        pool: str ='cls', dropout: int = 0., emb_dropout: int = 0.,
+        use_pos_embedding: bool = False, emb_grid_size: int = 10
+    ):
         super().__init__()
         assert pool in {'cls', 'mean'}, 'pool type must be either cls (cls token) or mean (mean pooling)'
         self.cls_token = nn.Parameter(torch.randn(dim))
-        self.pos_emb_density = pos_emb_density
-        self.pos_emb = nn.Parameter(torch.randn(pos_emb_density, pos_emb_density, dim))
-        #  slide embedding only allows 25 slides per patient
-        self.register_buffer("slide_emb", self.sinusoid_encoding(25, dim))
+
+        self.use_pos_embedding = use_pos_embedding
+        if use_pos_embedding:
+            self.pos_emb = InterpolationEmbedding2d(dim, grid_size=emb_grid_size)
+            # sinusoidal embedding used for distinguishing between patches of different slides
+            self.slide_emb = SinusoidEmbedding(25, dim)
 
         self.fc = nn.Sequential(nn.Linear(input_dim, dim, bias=True), nn.GELU())
         self.dropout = nn.Dropout(emb_dropout)
@@ -124,9 +197,11 @@ class TransMIL(nn.Module):
         # note: feature vectors added during zero padding get assigned the embedding
         # for the top left patch, however they are masked out in the transformer,
         # thus they don't influence the gradient of this embedding vector
-        pos_emb = self.bilinear_interp(coords)
-        slide_emb = self.slide_emb[slide_ids]
-        x = x + pos_emb + slide_emb
+        if self.use_pos_embedding:
+            pos_emb = self.pos_emb(coords)
+            slide_emb = self.slide_emb(slide_ids)
+            x = x + pos_emb # + slide_emb
+            
 
         cls_tokens = repeat(self.cls_token, 'd -> b 1 d', b=b)
         x = torch.cat((cls_tokens, x), dim=1)
@@ -148,49 +223,3 @@ class TransMIL(nn.Module):
             x = x.mean(dim=1) if self.pool == 'mean' else x[:, 0]
 
         return self.mlp_head(x)
-
-    def bilinear_interp(self, coords):
-        """
-        Bilinear interpolation for getting the positional embeddings for each
-        patch from the learnable pos. embedding matrix.
-        """
-        (b, l), d = coords.shape[:2], self.pos_emb.shape[-1]
-        coords = coords.reshape(-1, 2)
-        device = coords.device
-
-        offset = torch.tensor([
-            [0, 0], # upper left
-            [0, 1], # upper right
-            [1, 0], # lower left
-            [1, 1], # lower right
-        ], dtype=torch.int32, device=device)
-
-        coords = coords * (self.pos_emb_density - 1)
-        corner_idcs = torch.floor(coords).to(device, torch.int32).unsqueeze(1) + offset
-        corner_idcs.clip_(0, self.pos_emb_density - 1)
-
-        corner_idcs = corner_idcs.reshape(-1, 2)
-        corners = self.pos_emb[corner_idcs[:, 0], corner_idcs[:, 1]]
-        corner_idcs = corner_idcs.reshape(-1, 4, 2)
-        corners = corners.reshape(-1, 2, 2, d)
-
-        in_cell_pos = coords - corner_idcs[:, 0]
-        del_x = torch.cat((1 - in_cell_pos[:, :1], in_cell_pos[:, :1]), dim=-1)
-        del_y = torch.cat((1 - in_cell_pos[:, 1:], in_cell_pos[:, 1:]), dim=-1)
-
-        interp = einsum(del_x, corners, del_y, "b h, b h w d, b w -> b d")
-        return interp.reshape(b, l, d)
-
-    def sinusoid_encoding(self, num_tokens, token_len):
-        """
-        Sinusoidal embedding used for distinguishing between patches of different slides.
-        """
-        position_angle_vec = 1 / torch.pow(100, 2 * (torch.arange(token_len) // 2) / token_len)
-        sinusoid_table = torch.outer(torch.arange(num_tokens), position_angle_vec)
-        sinusoid_table[:, 0::2] = torch.sin(sinusoid_table[:, 0::2])
-        sinusoid_table[:, 1::2] = torch.cos(sinusoid_table[:, 1::2])
-
-        sinusoid_table.sub_(sinusoid_table.mean(axis=-1, keepdim=True))
-        sinusoid_table.div_(sinusoid_table.std(axis=-1, keepdim=True))
-
-        return sinusoid_table

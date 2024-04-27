@@ -62,7 +62,8 @@ def train(
     # build dataloaders
     batch_size = 64
     train_dl = DataLoader(
-        train_ds, batch_size=batch_size, shuffle=True, num_workers=cores, drop_last=len(train_ds) > batch_size,
+        train_ds, batch_size=batch_size, shuffle=True, num_workers=cores,
+        drop_last=len(train_ds) > batch_size,
         device=device, pin_memory=device.type == "cuda"
     )
     valid_dl = DataLoader(
@@ -73,12 +74,16 @@ def train(
     feature_dim = batch[0].shape[-1]
 
     # for binary classification num_classes=2
-    model = TransMIL(num_classes=len(target_enc.categories_[0]), input_dim=feature_dim, dim=512, mlp_dim=768)
+    model = TransMIL(
+        num_classes=len(target_enc.categories_[0]), input_dim=feature_dim,
+        dim=512, mlp_dim=768, use_pos_embedding=True, emb_grid_size=5,
+        dropout=.1
+    )
     model.to(device)
     print(f"Model: {model}", end=" ")
     print(f"[Parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad)}]")
 
-    # weigh inversely to class occurances
+    # weigh inversely to class occurrences
     counts = pd.Series(targs[~valid_idxs]).value_counts()
     weight = counts.sum() / counts
     weight /= weight.sum()
@@ -87,7 +92,7 @@ def train(
         list(map(weight.get, target_enc.categories_[0])), dtype=torch.float32, device=device)
     loss_func = nn.CrossEntropyLoss(weight=weight)
 
-    dls = DataLoaders(train_dl, valid_dl, device=device) #
+    dls = DataLoaders(train_dl, valid_dl, device=device)
     learn = Learner(
         dls,
         model,
@@ -102,6 +107,24 @@ def train(
         CSVLogger()]
     
     learn.fit_one_cycle(n_epoch=n_epoch, lr_max=1e-4, wd=1e-6, cbs=cbs)
+
+    # visualize embedding
+    with torch.no_grad():
+        grid_size = learn.model.pos_emb.grid_size
+        emb = learn.model.pos_emb.embedding.reshape(-1, 512)
+        emb = torch.nn.functional.normalize(emb, 2, dim=-1)
+        cossim = (emb @ emb.T).reshape(grid_size, grid_size, grid_size, grid_size)
+
+        import matplotlib.pyplot as plt
+        fig, axs = plt.subplots(grid_size, grid_size, figsize=(10, 10))
+        fig.tight_layout()
+        plt.subplots_adjust(wspace=0.1, hspace=0.1)
+        for ax in axs.flat:
+            ax.axis('off')
+        for i in range(grid_size):
+            for j in range(grid_size):
+                axs[i, j].imshow(cossim[i, j].cpu(), cmap='viridis')
+        plt.savefig(path / "pos_emb_cossim_after.png")
 
     return learn
 
