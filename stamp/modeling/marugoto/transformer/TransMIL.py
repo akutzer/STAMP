@@ -7,6 +7,8 @@ from torch import nn
 import torch.nn.functional as F
 from einops import repeat, rearrange, einsum
 
+import matplotlib.pyplot as plt
+from pathlib import Path
 
 
 class RMSNorm(nn.Module):
@@ -131,6 +133,45 @@ class InterpolationEmbedding2d(nn.Module):
     
     def __repr__(self):
         return f"InterpolationEmbedding2d(dim={self.dim}, grid_size={self.grid_size})"
+
+    def plot(self, path=None, interpolate: bool = False):
+        fig = plt.figure(figsize=(self.grid_size, self.grid_size))
+        device = self.offset.device
+
+        with torch.no_grad():
+            if interpolate:
+                step_size = 10
+                samples = (self.grid_size - 1) * step_size + 1
+                x_coords, y_coords = torch.meshgrid(torch.linspace(0, 1, samples, device=device), torch.linspace(0, 1, samples, device=device), indexing="ij")
+                x_coords = x_coords.reshape(-1, 1)
+                y_coords = y_coords.reshape(-1, 1)
+                grid = torch.cat((x_coords, y_coords), dim=1)[None]
+                emb = self(grid)
+                emb = emb.reshape(samples, samples, -1)
+            else:
+                step_size = 1
+                samples = self.grid_size
+                emb = self.embedding
+
+            emb = torch.nn.functional.normalize(emb, 2, dim=-1)
+            emb1, emb2 = emb[::step_size, ::step_size].reshape(-1, 512), emb.reshape(-1, 512)
+            cossim = (emb1 @ emb2.T).reshape(self.grid_size, self.grid_size, samples, samples)
+
+        fig, axs = plt.subplots(self.grid_size, self.grid_size, figsize=(10, 10))
+        fig.tight_layout()
+        plt.subplots_adjust(wspace=0.1, hspace=0.1)
+        for ax in axs.flat:
+            ax.axis('off')
+        for i in range(self.grid_size):
+            for j in range(self.grid_size):
+                axs[i, j].imshow(cossim[i, j].cpu(), cmap='viridis')
+        if path is not None and (path := Path(path)).exists():
+            if interpolate:
+                path /= "pos_emb_cossim_interp.png"
+            else:
+                path /= "pos_emb_cossim.png"
+            plt.savefig(path, dpi=300)
+        return axs
     
 
 class SinusoidEmbedding(nn.Module):
@@ -155,6 +196,16 @@ class SinusoidEmbedding(nn.Module):
 
     def __repr__(self):
         return f"SinusoidEmbedding(num_tokens={self.num_tokens}, dim={self.dim})"
+    
+    def plot(self, path=None):
+        fig = plt.figure(figsize=(self.dim / self.num_tokens, 2))
+        ax = plt.imshow(self.embedding.cpu(), interpolation="none")
+        plt.tight_layout()
+
+        if path is not None and (path := Path(path)).exists():
+            path /= "sinusoid_embedding.png"
+            plt.savefig(path, dpi=300)
+        return ax
 
 
 class TransMIL(nn.Module):

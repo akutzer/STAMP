@@ -108,23 +108,10 @@ def train(
     
     learn.fit_one_cycle(n_epoch=n_epoch, lr_max=1e-4, wd=1e-6, cbs=cbs)
 
-    # visualize embedding
-    with torch.no_grad():
-        grid_size = learn.model.pos_emb.grid_size
-        emb = learn.model.pos_emb.embedding.reshape(-1, 512)
-        emb = torch.nn.functional.normalize(emb, 2, dim=-1)
-        cossim = (emb @ emb.T).reshape(grid_size, grid_size, grid_size, grid_size)
-
-        import matplotlib.pyplot as plt
-        fig, axs = plt.subplots(grid_size, grid_size, figsize=(10, 10))
-        fig.tight_layout()
-        plt.subplots_adjust(wspace=0.1, hspace=0.1)
-        for ax in axs.flat:
-            ax.axis('off')
-        for i in range(grid_size):
-            for j in range(grid_size):
-                axs[i, j].imshow(cossim[i, j].cpu(), cmap='viridis')
-        plt.savefig(path / "pos_emb_cossim_after.png")
+    # visualize embeddings
+    learn.model.slide_emb.plot(path)
+    learn.model.pos_emb.plot(path)
+    learn.model.pos_emb.plot(path, interpolate=True)
 
     return learn
 
