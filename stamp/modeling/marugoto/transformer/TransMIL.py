@@ -71,12 +71,13 @@ class Attention(nn.Module):
 
         out = attn @ v
         out = rearrange(out, 'b h n d -> b n (h d)')
-        return self.to_out(out)
+        return self.to_out(out), attn
 
 
 class Transformer(nn.Module):
     def __init__(self, dim, depth, heads, dim_head, mlp_dim, norm_layer=nn.LayerNorm, dropout=0.):
         super().__init__()
+        self.depth = depth
         self.layers = nn.ModuleList([])
         for _ in range(depth):
             self.layers.append(nn.ModuleList([
@@ -87,9 +88,10 @@ class Transformer(nn.Module):
 
     def forward(self, x, mask=None):
         for attn, ff in self.layers:
-            x = attn(x, mask=mask) + x
+            x_attn, attn_mask = attn(x, mask=mask)
+            x = x_attn + x
             x = ff(x) + x
-        return self.norm(x)
+        return self.norm(x), attn_mask
 
 
 class InterpolationEmbedding2d(nn.Module): 
@@ -140,7 +142,7 @@ class InterpolationEmbedding2d(nn.Module):
 
         with torch.no_grad():
             if interpolate:
-                step_size = 10
+                step_size = 15
                 samples = (self.grid_size - 1) * step_size + 1
                 x_coords, y_coords = torch.meshgrid(torch.linspace(0, 1, samples, device=device), torch.linspace(0, 1, samples, device=device), indexing="ij")
                 x_coords = x_coords.reshape(-1, 1)
@@ -157,6 +159,10 @@ class InterpolationEmbedding2d(nn.Module):
             emb1, emb2 = emb[::step_size, ::step_size].reshape(-1, 512), emb.reshape(-1, 512)
             cossim = (emb1 @ emb2.T).reshape(self.grid_size, self.grid_size, samples, samples)
 
+            # emb1, emb2 = emb[::step_size, ::step_size].reshape(-1, 1, 512), emb.reshape(-1, 512)
+            # l2sim = torch.linalg.norm(emb1 - emb2, 2, dim=-1)
+            # cossim = l2sim.reshape(self.grid_size, self.grid_size, samples, samples)
+
         fig, axs = plt.subplots(self.grid_size, self.grid_size, figsize=(10, 10))
         fig.tight_layout()
         plt.subplots_adjust(wspace=0.1, hspace=0.1)
@@ -171,6 +177,7 @@ class InterpolationEmbedding2d(nn.Module):
             else:
                 path /= "pos_emb_cossim.png"
             plt.savefig(path, dpi=300)
+        plt.close()
         return axs
     
 
@@ -205,6 +212,7 @@ class SinusoidEmbedding(nn.Module):
         if path is not None and (path := Path(path)).exists():
             path /= "sinusoid_embedding.png"
             plt.savefig(path, dpi=300)
+        plt.close()
         return ax
 
 
@@ -235,10 +243,10 @@ class TransMIL(nn.Module):
             nn.Linear(dim, num_classes)
         )
 
-    def forward(self, x, lens, slide_ids, coords):
+    def forward(self, x, lens, slide_ids, coords, return_last_attn: bool = False):
         # remove unnecessary padding
         max_idx = torch.amax(lens)
-        x, slide_ids, coords = x[:, :max_idx], slide_ids[:, :max_idx], coords[:, :max_idx] 
+        x, slide_ids, coords = x[:, :max_idx], slide_ids[:, :max_idx], coords[:, :max_idx]
         b, n, d = x.shape
 
         # map input sequence to latent space of TransMIL
@@ -265,12 +273,13 @@ class TransMIL(nn.Module):
             mask = mask[:, None, :, None].to(torch.float)
             mask = ~(mask @ mask.mT).to(torch.bool)
         
-        x = self.transformer(x, mask)
+        x, attn_mask = self.transformer(x, mask)
 
         if mask is not None and self.pool == 'mean':
             x = torch.cumsum(x, dim=1)[torch.arange(b), lens-1]
             x = x / lens[..., None]
         else:
             x = x.mean(dim=1) if self.pool == 'mean' else x[:, 0]
+        
+        return (self.mlp_head(x), attn_mask) if return_last_attn else self.mlp_head(x)
 
-        return self.mlp_head(x)

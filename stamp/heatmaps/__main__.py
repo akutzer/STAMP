@@ -13,8 +13,10 @@ from matplotlib.axes import Axes
 from matplotlib.patches import Patch
 from PIL import Image
 from torch import Tensor
+import math
 
 from stamp.preprocessing.helpers.common import supported_extensions
+
 
 
 def load_slide_ext(wsi_dir: Path) -> openslide.OpenSlide:
@@ -34,18 +36,17 @@ def get_stride(coords: Tensor) -> int:
     return stride
 
 
+@torch.enable_grad()
 def gradcam_per_category(
-    learn: Learner, feats: Tensor, categories: Collection
+    learn: Learner, feats: Tensor, categories: Collection, slide_ids: Tensor, coords: Tensor
 ) -> tuple[Tensor, Tensor]:
     feats_batch = feats.expand((len(categories), *feats.shape)).detach()
     feats_batch.requires_grad = True
-    preds = torch.softmax(
-        learn.model(feats_batch, torch.tensor([len(feats)] * len(categories))),
-        dim=1,
-    )
+    pred, attn_mask = learn.model(feats_batch, torch.tensor([len(feats)] * len(categories)), slide_ids, coords, return_last_attn=True)
+    preds = torch.softmax(pred, dim=-1)
     preds.trace().backward()
-    gradcam = (feats_batch * feats_batch.grad).mean(-1).abs()
-    return preds, gradcam
+    gradcam = (feats_batch.detach() * feats_batch.grad).mean(-1).abs_()
+    return preds, gradcam, attn_mask[0, :, 0]
 
 
 def vals_to_im(
@@ -70,21 +71,27 @@ def show_thumb(slide, thumb_ax: Axes, attention: Tensor) -> None:
     dims_um = np.array(slide.dimensions) * mpp
     thumb = slide.get_thumbnail(np.round(dims_um * 8 / 256).astype(int))
     thumb_ax.imshow(np.array(thumb)[: attention.shape[0] * 8, : attention.shape[1] * 8])
+    thumb_ax.set_title("Original WSI")
     return np.array(thumb)[: attention.shape[0] * 8, : attention.shape[1] * 8]
 
 
 def show_class_map(
     class_ax: Axes, top_scores: Tensor, gradcam_2d, categories: Collection[str]
 ) -> None:
-    cmap = plt.get_cmap("Pastel1")
-    classes = cmap(top_scores.indices[:, :, 0])
-    classes[..., -1] = (gradcam_2d.sum(-1) > 0).detach().cpu() * 1.0
+    cmap = plt.get_cmap("Set1")
+    classes = cmap(top_scores.indices[..., 0])
+
+    c = len(categories)
+    # clips values from range [1 / c, 1] to [0, 1]
+    alpha = (top_scores.values[..., 0] * c - 1) / (c - 1)
+    classes[..., -1] = alpha.clip_(0, 1)
+    # classes[..., -1] = top_scores.values[..., 0] != 0
+
     class_ax.imshow(classes)
-    class_ax.legend(
-        handles=[
-            Patch(facecolor=cmap(i), label=cat) for i, cat in enumerate(categories)
-        ]
-    )
+    class_ax.legend(handles=[
+        Patch(facecolor=cmap(i), label=cat) for i, cat in enumerate(categories)
+    ])
+    class_ax.set_title("Prediction of each tile")
 
 
 def get_n_toptiles(
@@ -132,6 +139,7 @@ def get_n_toptiles(
         )
 
 
+@torch.no_grad()
 def main(
     slide_name: str,
     feature_dir: Path,
@@ -155,22 +163,41 @@ def main(
         print(f"Creating heatmaps for {slide_path.name}...")
         with h5py.File(h5_path) as h5:
             feats = torch.tensor(h5["feats"][:]).float()
-            coords = torch.tensor(h5["coords"][:], dtype=torch.int)
+            coords = torch.tensor(h5["coords"][:].astype(np.int32), dtype=torch.int)
+            slide_ids = torch.zeros(h5["feats"][:][:].shape[0], dtype=torch.int)
 
         # stride is 224 using normal operations
         stride = get_stride(coords)
 
-        preds, gradcam = gradcam_per_category(
-            learn=learn, feats=feats, categories=categories
+        # min-max normalize coords
+        coords_norm = (coords - coords.amin(axis=0, keepdim=True)) / (1e-8 + coords.amax(axis=0, keepdim=True))
+
+        preds, gradcam, attn_mask = gradcam_per_category(
+            learn=learn, feats=feats, categories=categories, slide_ids=slide_ids[None], coords=coords_norm[None]
         )
-        gradcam_2d = vals_to_im(gradcam.permute(-1, -2), torch.div(coords, stride, rounding_mode='floor')).detach()
+        gradcam_2d = vals_to_im(gradcam.permute(-1, -2), torch.div(coords, stride, rounding_mode='floor'))
+
+        heads = attn_mask.shape[0]
+        attn_mask = attn_mask[:, 1:] # ignore class token, but no ideal
+        attn_mask_2d = vals_to_im(attn_mask.permute(-1, -2), torch.div(coords, stride, rounding_mode='floor'))
+        
+        nrows = 2
+        ncols = math.ceil(heads / nrows)
+        fig, axs = plt.subplots(nrows=2, ncols=ncols, figsize=(ncols*3, nrows*3))
+        plt.tight_layout(pad=1.5)
+        fig.suptitle("Attention heads of $[CLS]$ token")
+        for i in range(heads):
+            axs[i // ncols, i % ncols].imshow(attn_mask_2d[:, :, i])
+            axs[i // ncols, i % ncols].axis("off")
+        fig.savefig(slide_output_dir / f"{h5_path.stem}-attention-heads.png")
 
         scores = torch.softmax(
-            learn.model(feats.unsqueeze(-2), torch.ones((len(feats)))), dim=1
+            learn.model(feats[:, None], torch.ones(len(feats), dtype=torch.int), slide_ids[:, None], coords_norm[:, None]), dim=1
         )
-        scores_2d = vals_to_im(scores, torch.div(coords, stride, rounding_mode='floor')).detach()
-        fig, axs = plt.subplots(nrows=2, ncols=max(2, len(categories)), figsize=(12, 8))
+        scores_2d = vals_to_im(scores, torch.div(coords, stride, rounding_mode='floor'))
 
+        fig, axs = plt.subplots(nrows=2, ncols=max(2, len(categories)), figsize=(12, 8))
+        plt.tight_layout(pad=1.5)
         show_class_map(
             class_ax=axs[0, 1],
             top_scores=scores_2d.topk(2),
@@ -201,19 +228,18 @@ def main(
 
             attention = torch.where(
                 topk.indices[..., 0] == pos_idx,
-                gradcam_2d[..., pos_idx] / gradcam_2d.max(),
+                gradcam_2d[..., pos_idx] / gradcam_2d.amax(),
                 (
                     others := gradcam_2d[
                         ..., list(set(range(len(categories))) - {pos_idx})
                     ]
-                    .max(-1)
-                    .values
+                    .amax(-1)
                 )
-                / others.max(),
+                / others.amax(),
             )
 
             score_im = plt.get_cmap("RdBu")(
-                -category_support * attention / attention.max() / 2 + 0.5
+                -category_support * attention / attention.amax() / 2 + 0.5
             )
 
             score_im[..., -1] = attention > 0
