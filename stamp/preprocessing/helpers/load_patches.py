@@ -23,7 +23,7 @@ def extract_patches(
     # overestimate the number of non-empty patches
     patches = np.zeros((n_max, kernel_size[0], kernel_size[1], img.shape[-1]), dtype=np.uint8)
     # patches_coords stores the (height, width)-coordinate of the top-left corner for each patch
-    patches_coords = np.zeros((n_max, 2), dtype=np.uint16)
+    patches_coords = np.zeros((n_max, 2), dtype=np.int32)
 
     k = 0
     for i in range(rows):

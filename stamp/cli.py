@@ -217,7 +217,9 @@ def run_cli(args: argparse.Namespace):
                  model_path=Path(c.model_path),
                  output_dir=Path(c.output_dir),
                  n_toptiles=int(c.n_toptiles),
-                 overview=c.overview)
+                 overview=c.overview,
+                 legacy=c.legacy  if 'legacy' in c else False,
+                 device=c.device  if 'device' in c else 'cpu')
         case _:
             raise ConfigurationError(f"Unknown command {args.command}")
 
