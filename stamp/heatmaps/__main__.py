@@ -56,8 +56,8 @@ def gradcam_per_category(
     def bckw_hook(module, grad_input, grad_output):
         gradcam_per_category.grad = grad_output[0][:, 1:]
 
-    layer = learn.model.transformer.layers[-1][0].norm
-    # layer = learn.model.transformer.layers[0][0].norm
+    # layer = learn.model.transformer.layers[-1][0].norm
+    layer = learn.model.transformer.layers[0][0].norm
 
     hook_handles = []
     hook_handles.append(layer.register_forward_hook(fwd_hook))
@@ -76,9 +76,11 @@ def gradcam_per_category(
     activation = gradcam_per_category.activation
     grad =  gradcam_per_category.grad
     gradcam = (activation * grad.mean(dim=-2, keepdim=True)).sum(dim=-1).relu_()
-    # negated gradients can be used for `counterfactual explanations`
-    neg_gradcam = (activation * (-grad).mean(dim=-2, keepdim=True)).sum(dim=-1).relu_()
-    
+    # negated gradients can be used for `counterfactual explanations`:
+    # neg_gradcam = (activation * (-grad).mean(dim=-2, keepdim=True)).sum(dim=-1).relu_()
+    # one could also combine both:
+    # gradcam = gradcam - neg_gradcam
+
 
     # old gradcam code from Maru
     if legacy:
@@ -126,16 +128,18 @@ def show_thumb(slide, thumb_ax: Axes, attention: Tensor) -> None:
 
 
 def show_class_map(
-    class_ax: Axes, top_scores: Tensor, categories: Collection[str]
+    class_ax: Axes, top_scores: Tensor, categories: Collection[str], legacy: bool
 ) -> None:
     cmap = plt.get_cmap("Set1")
     classes = cmap(top_scores.indices[..., 0])
 
-    c = len(categories)
-    # clips values from range [1 / c, 1] to [0, 1]
-    alpha = (top_scores.values[..., 0] * c - 1) / (c - 1)
-    classes[..., -1] = alpha.clip_(0, 1)
-    # classes[..., -1] = top_scores.values[..., 0] != 0
+    if legacy:
+        classes[..., -1] = top_scores.values[..., 0] != 0
+    else:
+        c = len(categories)
+        # clips values from range [1 / c, 1] to [0, 1]
+        alpha = (top_scores.values[..., 0] * c - 1) / (c - 1)
+        classes[..., -1] = alpha.clip_(0, 1)
 
     class_ax.imshow(classes)
     class_ax.legend(handles=[
@@ -281,6 +285,7 @@ def main(
             class_ax=axs[0, 1],
             top_scores=tile_preds_2d.topk(2),
             categories=categories,
+            legacy=legacy
         )
 
         slide = load_slide_ext(slide_path)
@@ -317,6 +322,9 @@ def main(
                 category_support = 2 * tile_preds_2d[..., pos_idx] - 1
                 attention = gradcam_2d[..., pos_idx] / gradcam_2d[mask].max()
                 score_im = plt.get_cmap("Reds")(attention)
+
+                # attention = (gradcam_2d[..., pos_idx] - gradcam_2d[mask].min()) / (gradcam_2d[mask].abs().max() - gradcam_2d[mask].min())
+                # score_im = plt.get_cmap("RdBu_r")(attention)
 
             # score_im[..., -1] = mask
 

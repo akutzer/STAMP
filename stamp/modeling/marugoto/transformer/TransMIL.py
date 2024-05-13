@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 
 
+
 class RMSNorm(nn.Module):
     def __init__(self, dim):
         super().__init__()
@@ -37,41 +38,60 @@ class FeedForward(nn.Module):
         return self.mlp(x)
 
 
+# class Attention(nn.Module):
+#     def __init__(self, dim, heads=8, dim_head=512 // 8, norm_layer=nn.LayerNorm, dropout=0.):
+#         super().__init__()
+#         inner_dim = dim_head * heads
+#         project_out = heads != 1 or dim_head != dim
+
+#         self.heads = heads
+#         self.scale = dim_head ** -0.5
+
+#         self.norm = norm_layer(dim)
+
+#         self.to_qkv = nn.Linear(dim, inner_dim * 3, bias=False)
+#         self.to_out = nn.Sequential(
+#             nn.Linear(inner_dim, dim),
+#             nn.Dropout(dropout)
+#         ) if project_out else nn.Identity()
+
+#     def forward(self, x, mask=None):
+#         x = self.norm(x)
+
+#         qkv = self.to_qkv(x).chunk(3, dim=-1)
+#         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=self.heads), qkv)
+#         dots = (q @ k.mT) * self.scale
+
+#         if mask is not None:
+#             mask_value = torch.finfo(dots.dtype).min
+#             dots.masked_fill_(mask, mask_value)
+
+#         # improve numerical stability of softmax
+#         dots = dots - torch.amax(dots, dim=-1, keepdim=True)
+#         attn = F.softmax(dots, dim=-1)
+
+#         out = attn @ v
+#         out = rearrange(out, 'b h n d -> b n (h d)')
+#         return self.to_out(out), attn
+
+
 class Attention(nn.Module):
     def __init__(self, dim, heads=8, dim_head=512 // 8, norm_layer=nn.LayerNorm, dropout=0.):
         super().__init__()
-        inner_dim = dim_head * heads
-        project_out = heads != 1 or dim_head != dim
-
         self.heads = heads
         self.scale = dim_head ** -0.5
 
         self.norm = norm_layer(dim)
+        self.mhsa = nn.MultiheadAttention(dim, heads, dropout, batch_first=True)
 
-        self.to_qkv = nn.Linear(dim, inner_dim * 3, bias=False)
-        self.to_out = nn.Sequential(
-            nn.Linear(inner_dim, dim),
-            nn.Dropout(dropout)
-        ) if project_out else nn.Identity()
 
     def forward(self, x, mask=None):
-        x = self.norm(x)
-
-        qkv = self.to_qkv(x).chunk(3, dim=-1)
-        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=self.heads), qkv)
-        dots = (q @ k.mT) * self.scale
-
         if mask is not None:
-            mask_value = torch.finfo(dots.dtype).min
-            dots.masked_fill_(mask, mask_value)
+            mask = mask.repeat(self.heads, 1, 1)
 
-        # improve numerical stability of softmax
-        dots = dots - torch.amax(dots, dim=-1, keepdim=True)
-        attn = F.softmax(dots, dim=-1)
-
-        out = attn @ v
-        out = rearrange(out, 'b h n d -> b n (h d)')
-        return self.to_out(out), attn
+        x = self.norm(x)        
+        attn_output, attn_output_weights = self.mhsa(x, x, x, attn_mask=mask)
+        return attn_output, attn_output_weights
 
 
 class Transformer(nn.Module):
@@ -221,7 +241,7 @@ class TransMIL(nn.Module):
         num_classes: int, input_dim: int = 768, dim: int = 512,
         depth: int = 2, heads: int = 8, dim_head: int = 64, mlp_dim: int = 2048,
         pool: str ='cls', dropout: int = 0., emb_dropout: int = 0.,
-        use_pos_embedding: bool = False, emb_grid_size: int = 10
+        use_pos_embedding: bool = False, emb_grid_size: int = 3
     ):
         super().__init__()
         assert pool in {'cls', 'mean'}, 'pool type must be either cls (cls token) or mean (mean pooling)'
@@ -243,10 +263,10 @@ class TransMIL(nn.Module):
             nn.Linear(dim, num_classes)
         )
 
-    def forward(self, x, lens, slide_ids, coords, return_last_attn: bool = False):
+    def forward(self, x, lens, slide_ids=None, coords=None, return_last_attn: bool = False):
         # remove unnecessary padding
         max_idx = torch.amax(lens)
-        x, slide_ids, coords = x[:, :max_idx], slide_ids[:, :max_idx], coords[:, :max_idx]
+        x = x[:, :max_idx]
         b, n, d = x.shape
 
         # map input sequence to latent space of TransMIL
@@ -257,6 +277,9 @@ class TransMIL(nn.Module):
         # for the top left patch, however they are masked out in the transformer,
         # thus they don't influence the gradient of this embedding vector
         if self.use_pos_embedding:
+            assert slide_ids is not None, "Slide ids needed for positional embedding"
+            assert coords is not None, "Tile coordinates needed for positional embedding"
+            slide_ids, coords =  slide_ids[:, :max_idx], coords[:, :max_idx]
             pos_emb = self.pos_emb(coords)
             slide_emb = self.slide_emb(slide_ids)
             x = x + pos_emb # + slide_emb
@@ -269,9 +292,11 @@ class TransMIL(nn.Module):
         # mask indicating zero padded feature vectors
         mask = None
         if torch.amin(lens) != torch.amax(lens):
+            # mask = torch.arange(0, torch.max(lens), dtype=torch.int32, device=x.device).repeat(b, 1) < lens[..., None]
+            # mask = mask[:, None, :, None].to(torch.float)
+            # mask = ~(mask @ mask.mT).to(torch.bool)
             mask = torch.arange(0, torch.max(lens), dtype=torch.int32, device=x.device).repeat(b, 1) < lens[..., None]
-            mask = mask[:, None, :, None].to(torch.float)
-            mask = ~(mask @ mask.mT).to(torch.bool)
+            mask = ~mask[:, None, :].repeat(1, (n + 1), 1)
         
         x, attn_mask = self.transformer(x, mask)
 
@@ -282,4 +307,3 @@ class TransMIL(nn.Module):
             x = x.mean(dim=1) if self.pool == 'mean' else x[:, 0]
         
         return (self.mlp_head(x), attn_mask) if return_last_attn else self.mlp_head(x)
-
