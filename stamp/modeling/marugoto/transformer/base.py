@@ -28,7 +28,7 @@ def train(
     add_features: Iterable[Tuple[SKLearnEncoder, Sequence[Any]]] = [],
     valid_idxs: np.ndarray,
     n_epoch: int = 32,
-    patience: int = 10,
+    patience: int = 8,
     path: Optional[Path] = None,
     cores: int = 8,
 ) -> Learner:
@@ -76,8 +76,7 @@ def train(
     # for binary classification num_classes=2
     model = TransMIL(
         num_classes=len(target_enc.categories_[0]), input_dim=feature_dim,
-        dim=512, mlp_dim=768, use_pos_embedding=True, emb_grid_size=5,
-        dropout=.1
+        dim=512, mlp_dim=768, use_pos_embedding=False, dropout=.1
     )
     model.to(device)
     print(f"Model: {model}", end=" ")
@@ -109,9 +108,10 @@ def train(
     learn.fit_one_cycle(n_epoch=n_epoch, lr_max=1e-4, wd=1e-6, cbs=cbs)
 
     # visualize embeddings
-    learn.model.slide_emb.plot(path)
-    learn.model.pos_emb.plot(path)
-    learn.model.pos_emb.plot(path, interpolate=True)
+    if model.use_pos_embedding:
+        learn.model.slide_emb.plot(path)
+        learn.model.pos_emb.plot(path)
+        learn.model.pos_emb.plot(path, interpolate=True)
 
     return learn
 
