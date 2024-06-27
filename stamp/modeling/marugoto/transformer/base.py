@@ -66,7 +66,7 @@ def train(
             (enc, vals[valid_idxs])
             for enc, vals in add_features],
         bag_size=None)
-    
+
     # build dataloaders
     train_dl = DataLoader(
         train_ds, batch_size=batch_size, shuffle=True, num_workers=cores,
@@ -94,14 +94,14 @@ def train(
     print(f"Model: {model}", end=" ")
     print(f"[Parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad)}]")
 
-    # weigh inversely to class occurrences
-    counts = pd.Series(targs[~valid_idxs]).value_counts()
-    weight = counts.sum() / counts
-    weight /= weight.sum()
-    # reorder according to vocab
-    weight = torch.tensor(
-        list(map(weight.get, target_enc.categories_[0])), dtype=torch.float32, device=device)
-    loss_func = nn.CrossEntropyLoss(weight=weight)
+    # # weigh inversely to class occurrences
+    # counts = pd.Series(targets[~valid_idxs]).value_counts()
+    # weight = counts.sum() / counts
+    # weight /= weight.sum()
+    # # reorder according to vocab
+    # weight = torch.tensor(
+    #     list(map(weight.get, target_enc.categories_[0])), dtype=torch.float32, device=device)
+    loss_func = lambda pred, targ: print(pred, targ) 
 
     dls = DataLoaders(train_dl, valid_dl, device=device)
 

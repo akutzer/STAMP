@@ -14,7 +14,7 @@ from fastai.vision.learner import load_learner
 import torch
 
 from .base import train, deploy
-from .data import get_cohort_df, get_target_enc, SKLearnEncoder
+from .data import get_cohort_df, get_target_enc, SKLearnEncoder, DummyLabelTransform
 
 __all__ = [
     'train_categorical_model_', 'deploy_categorical_model_', 'categorical_crossval_']
@@ -76,7 +76,7 @@ def train_categorical_model_(
         'clini': str(Path(clini_table).absolute()),
         'slide': str(Path(slide_table).absolute()),
         'feature_dir': str(feature_dir.absolute()),
-        'target_label': str(target_label),
+        'target_label': [str(c) for c in target_label],
         'cat_labels': [str(c) for c in cat_labels],
         'cont_labels': [str(c) for c in cont_labels],
         'output_path': str(output_path.absolute()),
@@ -87,43 +87,31 @@ def train_categorical_model_(
         print(f'{model_path} already exists. Skipping...')
         return
 
-    clini_df = pd.read_csv(clini_table, dtype=str) if Path(clini_table).suffix == '.csv' else pd.read_excel(clini_table, dtype=str)
-    slide_df = pd.read_csv(slide_table, dtype=str) if Path(slide_table).suffix == '.csv' else pd.read_excel(slide_table, dtype=str)
- 
-    df = clini_df.merge(slide_df, on='PATIENT')
-
-    # filter na, infer categories if not given
-    df = df.dropna(subset=target_label)
-
-    # TODO move into get_cohort_df
-    if not categories:
-        categories = df[target_label].unique()
-    categories = np.array(categories)
+    df, categories = get_cohort_df(clini_table, slide_table, feature_dir, target_label, categories)
     info['categories'] = list(categories)
 
-    df = get_cohort_df(clini_table, slide_table, feature_dir, target_label, categories)
-
     print('Overall distribution')
-    print(df[target_label].value_counts())
-    info['class distribution'] = {'overall': {  # type: ignore
-        k: int(v) for k, v in df[target_label].value_counts().items()}}
-
+    # info['class distribution'] = {'overall': {  # type: ignore
+    #     k: int(v) for k, v in df[target_label].value_counts().items()}}
+    
     # Split off validation set
-    train_patients, valid_patients = train_test_split(df.PATIENT, stratify=df[target_label], random_state=1337)
+    event_label = target_label[1]
+    train_patients, valid_patients = train_test_split(df.PATIENT, stratify=df[event_label], random_state=1337)
     train_df = df[df.PATIENT.isin(train_patients)]
     valid_df = df[df.PATIENT.isin(valid_patients)]
     train_df.drop(columns='slide_path').to_csv(output_path/'train.csv', index=False)
     valid_df.drop(columns='slide_path').to_csv(output_path/'valid.csv', index=False)
 
-    info['class distribution']['training'] = {      # type: ignore
-        k: int(v) for k, v in train_df[target_label].value_counts().items()}
-    info['class distribution']['validation'] = {    # type: ignore
-        k: int(v) for k, v in valid_df[target_label].value_counts().items()}
-
+    # info['class distribution']['training'] = {      # type: ignore
+    #     k: int(v) for k, v in train_df[target_label].value_counts().items()}
+    # info['class distribution']['validation'] = {    # type: ignore
+    #     k: int(v) for k, v in valid_df[target_label].value_counts().items()}
+    
     with open(output_path/'info.json', 'w') as f:
         json.dump(info, f)
 
-    target_enc = OneHotEncoder(sparse_output=False).fit(categories.reshape(-1, 1))
+    # target_enc = OneHotEncoder(sparse_output=False).fit(categories.reshape(-1, 1))
+    target_enc = DummyLabelTransform()
 
     add_features = []
     if cat_labels: add_features.append((_make_cat_enc(train_df, cat_labels), df[cat_labels].values))
@@ -248,41 +236,21 @@ def categorical_crossval_(
         'clini': str(Path(clini_table).absolute()),
         'slide': str(Path(slide_table).absolute()),
         'feature_dir': str(feature_dir.absolute()),
-        'target_label': str(target_label),
+        'target_label': [str(c) for c in target_label],
         'cat_labels': [str(c) for c in cat_labels],
         'cont_labels': [str(c) for c in cont_labels],
         'output_path': str(output_path.absolute()),
         'n_splits': n_splits,
         'datetime': datetime.now().astimezone().isoformat()}
 
-    clini_df = pd.read_csv(clini_table, dtype=str) if Path(clini_table).suffix == '.csv' else pd.read_excel(clini_table, dtype=str)
-    slide_df = pd.read_csv(slide_table, dtype=str) if Path(slide_table).suffix == '.csv' else pd.read_excel(slide_table, dtype=str)
-
-
-    if 'PATIENT' not in clini_df.columns:
-        raise ValueError("The PATIENT column is missing in the clini_table.\n\
-                         Please ensure the patient identifier column is named PATIENT.")
-    
-    if 'PATIENT' not in slide_df.columns:
-        raise ValueError("The PATIENT column is missing in the slide_table.\n\
-                         Please ensure the patient identifier column is named PATIENT.")
-
-    df = clini_df.merge(slide_df, on='PATIENT')
-
-    # filter na, infer categories if not given
-    df = df.dropna(subset=target_label)
-
-    if not categories:
-        categories = df[target_label].unique()
-    categories = np.array(categories)
+    df, categories = get_cohort_df(clini_table, slide_table, feature_dir, target_label, categories)
     info['categories'] = list(categories)
-
-    df = get_cohort_df(clini_table, slide_table, feature_dir, target_label, categories)
 
     info['class distribution'] = {'overall': {
         k: int(v) for k, v in df[target_label].value_counts().items()}}
 
-    target_enc = OneHotEncoder(sparse_output=False).fit(categories.reshape(-1, 1))
+    # target_enc = OneHotEncoder(sparse_output=False).fit(categories.reshape(-1, 1))
+    target_enc = DummyLabelTransform()
 
     if (fold_path := output_path/'folds.pt').exists():
         folds = torch.load(fold_path)

@@ -188,6 +188,15 @@ class BagDataset(Dataset):
             return feats, len(feats)
 
 
+
+class DummyLabelTransform():
+    def __init__(self, categories:int = 1):
+        self.categories_ = [[f"cat{i}" for i in range(1, categories + 1)]]
+    
+    def transform(self, labels):
+        return labels
+
+
 def _to_fixed_size_bag(bag: torch.Tensor, bag_size: int = 512) -> Tuple[torch.Tensor, int]:
     # get up to bag_size elements
     bag_idxs = torch.randperm(bag.shape[0])[:bag_size]
@@ -312,9 +321,18 @@ def get_cohort_df(
     if 'FILENAME' in clini_df.columns and 'FILENAME' in slide_df.columns:
         clini_df = clini_df.drop(columns=['FILENAME'])
     
-    df = clini_df.merge(slide_df, on='PATIENT')
+    merge_on = list(clini_df.columns.intersection(slide_df.columns))
+    df = clini_df.merge(slide_df, on=merge_on)
+
+    # filter na and infer categories if not given
+    df = df.dropna(subset=target_label)
+    # if categories is None or len(categories) == 0:
+    #     categories = df[target_label].unique()
+    # categories = np.array(categories)
+
+
     # remove uninteresting
-    df = df[df[target_label].isin(categories)]
+    # df = df[df[target_label].isin(categories)]
     # remove slides we don't have
     h5s = set(feature_dir.glob('*.h5'))
     assert h5s, f'no features found in {feature_dir}!'
@@ -327,4 +345,8 @@ def get_cohort_df(
     patient_slides = df.groupby('PATIENT').slide_path.apply(list)
     df = patient_df.merge(patient_slides, left_on='PATIENT', right_index=True).reset_index()
 
-    return df
+    time_label, event_label = target_label
+    df[time_label] = df[time_label].astype(float)
+    df[event_label] = df[event_label].astype(int)
+
+    return df, []
