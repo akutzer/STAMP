@@ -8,7 +8,7 @@ import torch.nn.functional as F
 from fastai.vision.all import (
     Learner, DataLoader, DataLoaders, RocAuc,
     SaveModelCallback, CSVLogger, EarlyStoppingCallback,
-    MixedPrecision, AMPMode, OptimWrapper
+    MixedPrecision, AMPMode, OptimWrapper, Metric
 )
 import pandas as pd
 import numpy as np
@@ -26,38 +26,38 @@ T = TypeVar('T')
 
 
 
-class CoxLoss(nn.Module):
-    def __init__(self):
-        super().__init__()
-    
-    def forward(self, y_pred, y_true):
-        # TODO: harden for the case if there are no uncensored patients
-        event_time, event = y_true[:, 0], y_true[:, 1].type(torch.bool) # shape: (B,), (B,)
-        estimate = y_pred[:, 0]  # shape: (B,)
-        B = estimate.shape[0]
-
-        # determine all R patients, which are not censored
-        uncensored_time = event_time[event]  # shape: (R,)
-        
-
-        # mask which filters out all patient which already had the event
-        mask = (uncensored_time[:, None] <= event_time)  # shape: (R, B)
-
-        # calculate the log partial likelihood using Log-Sum-Exp trick
-        partial_like = estimate[event] - torch.log(torch.sum(mask * torch.exp(estimate), axis=-1))
-
-        loss = -torch.mean(partial_like)
-
-        return loss
-
-
-def concordance_index(y_pred, y_true):
-    event_time, event = y_true[:, 0], y_true[:, 1].type(torch.bool)
-    estimate = y_pred[:, 0]
+def cox_loss(event_time, event, estimate, reduce="mean"):
+    # TODO: harden for the case if there are no uncensored patients
     B = estimate.shape[0]
 
-    time_1 = event_time.unsqueeze(1).expand(-1, B)  # shape: (B, B)
-    event_1 = event.unsqueeze(1).expand(-1, B)  # shape: (B, B)
+    # determine all R patients, which are not censored
+    uncensored_time = event_time[event]  # shape: (R,)
+
+    # mask for filtering out all patient that already had the event
+    mask = (uncensored_time[:, None] <= event_time)  # shape: (R, B)
+
+    # calculate the negative log partial likelihood
+    partial_like = - (estimate[event] - torch.log(torch.sum(mask * torch.exp(estimate), axis=-1)))
+
+    if reduce == "mean":
+        loss = torch.mean(partial_like)
+    elif reduce == "sum":
+        loss = torch.sum(partial_like)
+
+    return loss
+
+
+def cox_loss_fn(y_pred, y_true, reduce="mean"):
+    event_time, event = y_true[:, 0], y_true[:, 1].type(torch.bool)
+    estimate = y_pred[:, 0]
+    return cox_loss(event_time, event, estimate)
+
+
+def concordance_index(event_time, event, estimate):
+    # event_time, event = y_true[:, 0], y_true[:, 1].type(torch.bool)
+    # estimate = y_pred[:, 0]
+    B = estimate.shape[0]
+
     comparable = (
         # both of them experienced an event (at different times)
         (event_time[:, None] < event_time) & (event[:, None] & event)
@@ -72,9 +72,54 @@ def concordance_index(y_pred, y_true):
     s2 = estimate[idx[1]]
     ci = torch.mean((s1 > s2).float())
 
-    # print(ci)
-    # print(concordance_index_censored(event.cpu().numpy(), event_time.cpu().numpy(), estimate.cpu().detach().numpy()))
+    # ci2 = concordance_index_censored(event, event_time, estimate)
+
     return ci
+    
+
+class SurvivalMetric(Metric):
+    "Stores predictions and targets on CPU in accumulate to perform final calculations with `func`."
+    def __init__(self, func, **kwargs):
+        self.func = func
+        self.func_kwargs = kwargs
+        self._name = self.func.__name__
+
+    def reset(self):
+        "Clear all stores values"
+        self.event_times, self.events, self.estimates = [], [], []
+
+    def accumulate(self, learn):
+        "Store targs and preds from `learn`, using activation function and argmax as appropriate"
+        self.accum_values(learn.pred.detach(), learn.y.detach())
+
+    def accum_values(self, preds, targs):
+        "Store targs and preds"
+        self.event_times.append(targs[:, 0].cpu())
+        self.events.append(targs[:, 1].cpu())
+        self.estimates.append(preds[:, 0].cpu())
+
+    def __call__(self, preds, targs):
+        "Calculate metric on one batch of data"
+        self.reset()
+        self.accum_values(preds.detach(), targs.detach())
+        return self.value
+
+    @property
+    def value(self):
+        "Value of the metric using accumulated preds and targs"
+        if len(self.estimates) == 0: return
+
+        self.event_times = torch.cat(self.event_times)
+        self.events = torch.cat(self.events).type(torch.bool)
+        self.estimates = torch.cat(self.estimates)
+
+        return self.func(self.event_times, self.events, self.estimates, **self.func_kwargs)
+
+    @property
+    def name(self):  return self._name
+
+    @name.setter
+    def name(self, value): self._name = value
 
 
 def train(
@@ -118,7 +163,7 @@ def train(
         add_features=[
             (enc, vals[valid_idxs])
             for enc, vals in add_features],
-        bag_size=8_000) #TODO: CHANGE TO NONE
+        bag_size=None)
 
     # build dataloaders
     train_dl = DataLoader(
@@ -127,7 +172,7 @@ def train(
         device=device, pin_memory=device.type == "cuda"
     )
     valid_dl = DataLoader(
-        valid_ds, batch_size=128, shuffle=False, num_workers=cores,
+        valid_ds, batch_size=1, shuffle=False, num_workers=cores,
         device=device, pin_memory=device.type == "cuda"
     )
     batch = train_dl.one_batch()
@@ -154,7 +199,7 @@ def train(
     # # reorder according to vocab
     # weight = torch.tensor(
     #     list(map(weight.get, target_enc.categories_[0])), dtype=torch.float32, device=device)
-    loss_func = CoxLoss()
+    loss_func = cox_loss_fn
 
     dls = DataLoaders(train_dl, valid_dl, device=device)
 
@@ -163,13 +208,16 @@ def train(
         model,
         loss_func=loss_func,
         opt_func = partial(OptimWrapper, opt=torch.optim.AdamW),
-        metrics=[concordance_index],
+        metrics=[
+            SurvivalMetric(cox_loss),
+            SurvivalMetric(concordance_index),
+        ],
         path=path,
     )#.to_bf16()
 
     cbs = [
-        SaveModelCallback(monitor='valid_loss', fname=f'best_valid'),
-        EarlyStoppingCallback(monitor='valid_loss', patience=patience),
+        SaveModelCallback(monitor='cox_loss', fname=f'best_valid'),
+        EarlyStoppingCallback(monitor='cox_loss', patience=patience),
         CSVLogger(),
         # MixedPrecision(amp_mode=AMPMode.BF16)
     ]
