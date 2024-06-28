@@ -13,6 +13,7 @@ from fastai.vision.all import (
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+from sksurv.metrics import concordance_index_censored
 
 from .data import make_dataset, SKLearnEncoder
 from .TransMIL import TransMIL
@@ -24,6 +25,58 @@ __all__ = ['train', 'deploy']
 T = TypeVar('T')
 
 
+
+class CoxLoss(nn.Module):
+    def __init__(self):
+        super().__init__()
+    
+    def forward(self, y_pred, y_true):
+        # TODO: harden for the case if there are no uncensored patients
+        event_time, event = y_true[:, 0], y_true[:, 1].type(torch.bool) # shape: (B,), (B,)
+        estimate = y_pred[:, 0]  # shape: (B,)
+        B = estimate.shape[0]
+
+        # determine all R patients, which are not censored
+        uncensored_time = event_time[event]  # shape: (R,)
+        
+
+        # mask which filters out all patient which already had the event
+        mask = (uncensored_time[:, None] <= event_time)  # shape: (R, B)
+
+        # calculate the log partial likelihood using Log-Sum-Exp trick
+        partial_like = estimate[event] - torch.log(torch.sum(mask * torch.exp(estimate), axis=-1))
+
+        loss = -torch.mean(partial_like)
+
+        return loss
+
+
+def concordance_index(y_pred, y_true):
+    event_time, event = y_true[:, 0], y_true[:, 1].type(torch.bool)
+    estimate = y_pred[:, 0]
+    B = estimate.shape[0]
+
+    time_1 = event_time.unsqueeze(1).expand(-1, B)  # shape: (B, B)
+    event_1 = event.unsqueeze(1).expand(-1, B)  # shape: (B, B)
+    comparable = (
+        # both of them experienced an event (at different times)
+        (event_time[:, None] < event_time) & (event[:, None] & event)
+        |  # or
+        # the one with a shorter observed survival time experienced an event,
+        # in which case the event-free patient “outlived” the other
+        ((event_time[:, None] < event_time) & (event[:, None] & (~event)))
+    )  
+    
+    idx = torch.where(comparable)
+    s1 = estimate[idx[0]]
+    s2 = estimate[idx[1]]
+    ci = torch.mean((s1 > s2).float())
+
+    # print(ci)
+    # print(concordance_index_censored(event.cpu().numpy(), event_time.cpu().numpy(), estimate.cpu().detach().numpy()))
+    return ci
+
+
 def train(
     *,
     bags: Sequence[Iterable[Path]],
@@ -33,9 +86,9 @@ def train(
     n_epoch: int = 32,
     patience: int = 8,
     path: Optional[Path] = None,
-    batch_size: int = 64,
+    batch_size: int = 128,
     cores: int = 8,
-    plot: bool = False
+    plot: bool = True
 ) -> Learner:
     """Train a MLP on image features.
 
@@ -57,7 +110,7 @@ def train(
         add_features=[
             (enc, vals[~valid_idxs])
             for enc, vals in add_features],
-        bag_size=512)
+        bag_size=1024)
 
     valid_ds = make_dataset(
         bags=bags[valid_idxs],
@@ -65,7 +118,7 @@ def train(
         add_features=[
             (enc, vals[valid_idxs])
             for enc, vals in add_features],
-        bag_size=None)
+        bag_size=8_000) #TODO: CHANGE TO NONE
 
     # build dataloaders
     train_dl = DataLoader(
@@ -74,7 +127,7 @@ def train(
         device=device, pin_memory=device.type == "cuda"
     )
     valid_dl = DataLoader(
-        valid_ds, batch_size=1, shuffle=False, num_workers=cores,
+        valid_ds, batch_size=128, shuffle=False, num_workers=cores,
         device=device, pin_memory=device.type == "cuda"
     )
     batch = train_dl.one_batch()
@@ -101,7 +154,7 @@ def train(
     # # reorder according to vocab
     # weight = torch.tensor(
     #     list(map(weight.get, target_enc.categories_[0])), dtype=torch.float32, device=device)
-    loss_func = lambda pred, targ: print(pred, targ) 
+    loss_func = CoxLoss()
 
     dls = DataLoaders(train_dl, valid_dl, device=device)
 
@@ -110,7 +163,7 @@ def train(
         model,
         loss_func=loss_func,
         opt_func = partial(OptimWrapper, opt=torch.optim.AdamW),
-        metrics=[RocAuc()],
+        metrics=[concordance_index],
         path=path,
     )#.to_bf16()
 

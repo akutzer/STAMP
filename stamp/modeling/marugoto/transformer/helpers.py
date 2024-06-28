@@ -90,7 +90,7 @@ def train_categorical_model_(
     df, categories = get_cohort_df(clini_table, slide_table, feature_dir, target_label, categories)
     info['categories'] = list(categories)
 
-    print('Overall distribution')
+    # print('Overall distribution')
     # info['class distribution'] = {'overall': {  # type: ignore
     #     k: int(v) for k, v in df[target_label].value_counts().items()}}
     
