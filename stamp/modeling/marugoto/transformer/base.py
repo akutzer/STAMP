@@ -8,15 +8,15 @@ import torch.nn.functional as F
 from fastai.vision.all import (
     Learner, DataLoader, DataLoaders, RocAuc,
     SaveModelCallback, CSVLogger, EarlyStoppingCallback,
-    MixedPrecision, AMPMode, OptimWrapper, Metric
+    MixedPrecision, AMPMode, OptimWrapper
 )
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from sksurv.metrics import concordance_index_censored
 
 from .data import make_dataset, SKLearnEncoder
 from .TransMIL import TransMIL
+
 
 
 __all__ = ['train', 'deploy']
@@ -24,102 +24,46 @@ __all__ = ['train', 'deploy']
 
 T = TypeVar('T')
 
+def cox_loss(y_pred, y_true):
+    time_value = torch.squeeze(y_true[0:, 0])
+    event = torch.squeeze(y_true[0:, 1]).type(torch.bool)
+    score = torch.squeeze(y_pred)
 
+    ix = torch.where(event)[0]
 
-def cox_loss(event_time, event, estimate, reduce="mean"):
-    # TODO: harden for the case if there are no uncensored patients
-    B = estimate.shape[0]
+    sel_time = time_value[ix]
+    sel_mat = (sel_time.unsqueeze(1).expand(1, sel_time.size()[0],
+                                            time_value.size()[0]).squeeze() <= time_value).float()
 
-    # determine all R patients, which are not censored
-    uncensored_time = event_time[event]  # shape: (R,)
+    p_lik = score[ix] - torch.log(torch.sum(sel_mat * torch.exp(score), axis=-1))
 
-    # mask for filtering out all patient that already had the event
-    mask = (uncensored_time[:, None] <= event_time)  # shape: (R, B)
-
-    # calculate the negative log partial likelihood
-    partial_like = - (estimate[event] - torch.log(torch.sum(mask * torch.exp(estimate), axis=-1)))
-
-    if reduce == "mean":
-        loss = torch.mean(partial_like)
-    elif reduce == "sum":
-        loss = torch.sum(partial_like)
+    loss = -torch.mean(p_lik)
 
     return loss
 
 
-def cox_loss_fn(y_pred, y_true, reduce="mean"):
-    event_time, event = y_true[:, 0], y_true[:, 1].type(torch.bool)
-    estimate = y_pred[:, 0]
-    return cox_loss(event_time, event, estimate)
+def combined_loss(model, outputs, targets, l1_strength, l2_strength):
+    cox_loss_value = cox_loss(outputs, targets)
+
+    l1_reg = sum(torch.norm(param, 1) for param in model.parameters())
+    l2_reg = sum(torch.norm(param, 2) for param in model.parameters())
+
+    return cox_loss_value + l1_strength * l1_reg + l2_strength * l2_reg
 
 
-def concordance_index(event_time, event, estimate):
-    # event_time, event = y_true[:, 0], y_true[:, 1].type(torch.bool)
-    # estimate = y_pred[:, 0]
-    B = estimate.shape[0]
+def concordance_index(y_pred, y_true):
+    time_value = torch.squeeze(y_true[0:, 0])
+    event = torch.squeeze(y_true[0:, 1]).type(torch.bool)
 
-    comparable = (
-        # both of them experienced an event (at different times)
-        (event_time[:, None] < event_time) & (event[:, None] & event)
-        |  # or
-        # the one with a shorter observed survival time experienced an event,
-        # in which case the event-free patient “outlived” the other
-        ((event_time[:, None] < event_time) & (event[:, None] & (~event)))
-    )  
-    
-    idx = torch.where(comparable)
-    s1 = estimate[idx[0]]
-    s2 = estimate[idx[1]]
-    ci = torch.mean((s1 > s2).float())
+    time_1 = time_value.unsqueeze(1).expand(1, time_value.size()[0], time_value.size()[0]).squeeze()
+    event_1 = event.unsqueeze(1).expand(1, event.size()[0], event.size()[0]).squeeze()
+    ix = torch.where(torch.logical_and(time_1 < time_value, event_1))
 
-    # ci2 = concordance_index_censored(event, event_time, estimate)
+    s1 = y_pred[ix[0]]
+    s2 = y_pred[ix[1]]
+    ci = torch.mean((s1 < s2).float())
 
     return ci
-    
-
-class SurvivalMetric(Metric):
-    "Stores predictions and targets on CPU in accumulate to perform final calculations with `func`."
-    def __init__(self, func, **kwargs):
-        self.func = func
-        self.func_kwargs = kwargs
-        self._name = self.func.__name__
-
-    def reset(self):
-        "Clear all stores values"
-        self.event_times, self.events, self.estimates = [], [], []
-
-    def accumulate(self, learn):
-        "Store targs and preds from `learn`, using activation function and argmax as appropriate"
-        self.accum_values(learn.pred.detach(), learn.y.detach())
-
-    def accum_values(self, preds, targs):
-        "Store targs and preds"
-        self.event_times.append(targs[:, 0].cpu())
-        self.events.append(targs[:, 1].cpu())
-        self.estimates.append(preds[:, 0].cpu())
-
-    def __call__(self, preds, targs):
-        "Calculate metric on one batch of data"
-        self.reset()
-        self.accum_values(preds.detach(), targs.detach())
-        return self.value
-
-    @property
-    def value(self):
-        "Value of the metric using accumulated preds and targs"
-        if len(self.estimates) == 0: return
-
-        self.event_times = torch.cat(self.event_times)
-        self.events = torch.cat(self.events).type(torch.bool)
-        self.estimates = torch.cat(self.estimates)
-
-        return self.func(self.event_times, self.events, self.estimates, **self.func_kwargs)
-
-    @property
-    def name(self):  return self._name
-
-    @name.setter
-    def name(self, value): self._name = value
 
 
 def train(
@@ -131,9 +75,11 @@ def train(
     n_epoch: int = 32,
     patience: int = 8,
     path: Optional[Path] = None,
-    batch_size: int = 128,
+    batch_size: int = 32,
     cores: int = 8,
-    plot: bool = True
+    plot: bool = False,
+    l1: float = 1e-3,
+    l2: float = 1e-3
 ) -> Learner:
     """Train a MLP on image features.
 
@@ -155,7 +101,7 @@ def train(
         add_features=[
             (enc, vals[~valid_idxs])
             for enc, vals in add_features],
-        bag_size=1024)
+        bag_size=512)
 
     valid_ds = make_dataset(
         bags=bags[valid_idxs],
@@ -199,7 +145,10 @@ def train(
     # # reorder according to vocab
     # weight = torch.tensor(
     #     list(map(weight.get, target_enc.categories_[0])), dtype=torch.float32, device=device)
-    loss_func = cox_loss_fn
+    
+    # Custom partial function to inject model and regularization strengths
+    loss_func = partial(combined_loss, model, l1_strength=l1, l2_strength=l2)
+
 
     dls = DataLoaders(train_dl, valid_dl, device=device)
 
@@ -208,16 +157,13 @@ def train(
         model,
         loss_func=loss_func,
         opt_func = partial(OptimWrapper, opt=torch.optim.AdamW),
-        metrics=[
-            SurvivalMetric(cox_loss),
-            SurvivalMetric(concordance_index),
-        ],
+        metrics=[concordance_index],
         path=path,
     )#.to_bf16()
 
     cbs = [
-        SaveModelCallback(monitor='cox_loss', fname=f'best_valid'),
-        EarlyStoppingCallback(monitor='cox_loss', patience=patience),
+        SaveModelCallback(monitor='valid_loss', fname=f'best_valid'),
+        EarlyStoppingCallback(monitor='valid_loss', patience=patience),
         CSVLogger(),
         # MixedPrecision(amp_mode=AMPMode.BF16)
     ]
