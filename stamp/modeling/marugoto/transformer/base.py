@@ -158,7 +158,7 @@ def train(
     add_features: Iterable[Tuple[SKLearnEncoder, Sequence[Any]]] = [],
     valid_idxs: np.ndarray,
     n_epoch: int = 32,
-    patience: int = 12,
+    patience: int = 10,
     path: Optional[Path] = None,
     batch_size: int = 128,
     cores: int = 8,
@@ -299,36 +299,39 @@ def deploy(
         bag_size=None)
 
     test_dl = DataLoader(
-        test_ds, batch_size=1, shuffle=False, num_workers=1)
+        test_ds, batch_size=1, shuffle=False, num_workers=8)
 
-    #removed softmax in forward, but add here to get 0-1 probabilities
-    patient_preds, patient_targs = learn.get_preds(dl=test_dl, act=nn.Softmax(dim=1))
+    patient_preds, patient_targs = learn.get_preds(dl=test_dl, act=lambda x: x)
 
     # make into DF w/ ground truth
     patient_preds_df = pd.DataFrame.from_dict({
         'PATIENT': test_df.PATIENT.values,
-        target_label: test_df[target_label].values,
-        **{f'{target_label}_{cat}': patient_preds[:, i]
-            for i, cat in enumerate(categories)}})
+        # target_label: test_df[target_label].values,
+        **{f'{label}': test_df[label].values
+            for label in target_label},
+        "Relative Risk (log)": patient_preds.flatten(),
+        "Relative Risk": np.exp(patient_preds).flatten(),
+    })
 
     # calculate loss
-    patient_preds = patient_preds_df[[
-        f'{target_label}_{cat}' for cat in categories]].values
-    patient_targs = target_enc.transform(
-        patient_preds_df[target_label].values.reshape(-1, 1))
-    patient_preds_df['loss'] = F.cross_entropy(
-        torch.tensor(patient_preds), torch.tensor(patient_targs),
-        reduction='none')
+    # patient_preds = patient_preds_df[[
+    #     f'{target_label}_{cat}' for cat in categories]].values
+    # patient_targs = target_enc.transform(
+    #     patient_preds_df[target_label].values.reshape(-1, 1))
+    # patient_preds_df['loss'] = F.cross_entropy(
+    #     torch.tensor(patient_preds), torch.tensor(patient_targs),
+    #     reduction='none')
 
-    patient_preds_df['pred'] = categories[patient_preds.argmax(1)]
+    # patient_preds_df['pred'] = categories[patient_preds]
 
     # reorder dataframe and sort by loss (best predictions first)
-    patient_preds_df = patient_preds_df[[
-        'PATIENT',
-        target_label,
-        'pred',
-        *(f'{target_label}_{cat}' for cat in categories),
-        'loss']]
-    patient_preds_df = patient_preds_df.sort_values(by='loss')
+    # patient_preds_df = patient_preds_df[[
+    #     'PATIENT',
+    #     *target_label,
+    #     'pred',
+    #     # 'loss'
+    # ]]
+
+    patient_preds_df = patient_preds_df.sort_values(by='PATIENT')
 
     return patient_preds_df
