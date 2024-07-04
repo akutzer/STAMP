@@ -246,8 +246,8 @@ def categorical_crossval_(
     df, categories = get_cohort_df(clini_table, slide_table, feature_dir, target_label, categories)
     info['categories'] = list(categories)
 
-    info['class distribution'] = {'overall': {
-        k: int(v) for k, v in df[target_label].value_counts().items()}}
+    # info['class distribution'] = {'overall': {
+    #     k: int(v) for k, v in df[target_label].value_counts().items()}}
 
     # target_enc = OneHotEncoder(sparse_output=False).fit(categories.reshape(-1, 1))
     target_enc = DummyLabelTransform()
@@ -258,7 +258,8 @@ def categorical_crossval_(
         #added shuffling with seed 1337
         skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=1337)
         patient_df = df.groupby('PATIENT').first().reset_index()
-        folds = tuple(skf.split(patient_df.PATIENT, patient_df[target_label]))
+        event_label = target_label[1]
+        folds = tuple(skf.split(patient_df.PATIENT, patient_df[event_label]))
         torch.save(folds, fold_path)
 
     info['folds'] = [
@@ -302,20 +303,21 @@ def _crossval_train(
     assert fold_df.PATIENT.nunique() == len(fold_df)
     fold_path.mkdir(exist_ok=True, parents=True)
 
-    info['class distribution'][f'fold {fold}'] = {'overall': {
-        k: int(v) for k, v in fold_df[target_label].value_counts().items()}}
+    # info['class distribution'][f'fold {fold}'] = {'overall': {
+    #     k: int(v) for k, v in fold_df[target_label].value_counts().items()}}
 
+    event_label = target_label[1]
     train_patients, valid_patients = train_test_split(
-        fold_df.PATIENT, stratify=fold_df[target_label], random_state=1337)
+        fold_df.PATIENT, stratify=fold_df[event_label], random_state=1337)
     train_df = fold_df[fold_df.PATIENT.isin(train_patients)]
     valid_df = fold_df[fold_df.PATIENT.isin(valid_patients)]
     train_df.drop(columns='slide_path').to_csv(fold_path/'train.csv', index=False)
     valid_df.drop(columns='slide_path').to_csv(fold_path/'valid.csv', index=False)
 
-    info['class distribution'][f'fold {fold}']['training'] = {
-        k: int(v) for k, v in train_df[target_label].value_counts().items()}
-    info['class distribution'][f'fold {fold}']['validation'] = {
-        k: int(v) for k, v in valid_df[target_label].value_counts().items()}
+    # info['class distribution'][f'fold {fold}']['training'] = {
+    #     k: int(v) for k, v in train_df[target_label].value_counts().items()}
+    # info['class distribution'][f'fold {fold}']['validation'] = {
+    #     k: int(v) for k, v in valid_df[target_label].value_counts().items()}
 
     add_features = []
     if cat_labels: add_features.append((_make_cat_enc(train_df, cat_labels), fold_df[cat_labels].values))

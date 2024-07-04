@@ -25,6 +25,32 @@ __all__ = ['train', 'deploy']
 T = TypeVar('T')
 
 
+class L1Regularizer(nn.Module):
+    """https://stackoverflow.com/questions/42704283/l1-l2-regularization-in-pytorch"""
+    def __init__(self, module, weight_decay):
+        super().__init__()
+        self.module = module
+        self.weight_decay = weight_decay
+
+        # Backward hook is registered on the specified module
+        self.hook = self.module.register_full_backward_hook(self._weight_decay_hook)
+
+    # Not dependent on backprop incoming values, placeholder
+    def _weight_decay_hook(self, *_):
+        for param in self.module.parameters():
+            # If there is no gradient or it was zeroed out
+            if param.grad is None or torch.all(param.grad == 0.):
+                # Apply regularization on it
+                param.grad = self.regularize(param)
+
+    def regularize(self, parameter):
+        # L1 regularization formula
+        return self.weight_decay * torch.sign(parameter.data)
+
+    def forward(self, *args, **kwargs):
+        # Simply forward and args and kwargs to module
+        return self.module(*args, **kwargs)
+
 
 def cox_loss(event_time, event, estimate, reduce="mean"):
     # TODO: harden for the case if there are no uncensored patients
@@ -50,7 +76,7 @@ def cox_loss(event_time, event, estimate, reduce="mean"):
 def cox_loss_fn(y_pred, y_true, reduce="mean"):
     event_time, event = y_true[:, 0], y_true[:, 1].type(torch.bool)
     estimate = y_pred[:, 0]
-    return cox_loss(event_time, event, estimate)
+    return cox_loss(event_time, event, estimate, reduce)
 
 
 def concordance_index(event_time, event, estimate):
@@ -68,9 +94,12 @@ def concordance_index(event_time, event, estimate):
     )  
     
     idx = torch.where(comparable)
-    s1 = estimate[idx[0]]
-    s2 = estimate[idx[1]]
-    ci = torch.mean((s1 > s2).float())
+    # extract the relative risk scores (in log space) for comparable patients
+    risk1 = estimate[idx[0]]
+    risk2 = estimate[idx[1]]
+    # patient 1, who experienced an event earlier than patient 2, should have
+    # a higher predicted relative risk score (in log space)
+    ci = torch.mean((risk1 > risk2).float())
 
     # ci2 = concordance_index_censored(event, event_time, estimate)
 
@@ -129,7 +158,7 @@ def train(
     add_features: Iterable[Tuple[SKLearnEncoder, Sequence[Any]]] = [],
     valid_idxs: np.ndarray,
     n_epoch: int = 32,
-    patience: int = 8,
+    patience: int = 12,
     path: Optional[Path] = None,
     batch_size: int = 128,
     cores: int = 8,
@@ -183,6 +212,7 @@ def train(
         num_classes=len(target_enc.categories_[0]), input_dim=feature_dim,
         dim=512, depth=2, heads=8, mlp_dim=512, dropout=.0
     )
+    model = L1Regularizer(model, weight_decay=1e-3)
     # TODO:
     # maybe increase mlp_dim? Not necessary 4*dim, but maybe a bit?
     # maybe add at least some dropout?
