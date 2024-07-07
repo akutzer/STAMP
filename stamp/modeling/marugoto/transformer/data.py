@@ -218,7 +218,7 @@ class DiscreteTimeTransform():
         out = np.stack(out, axis=-1)
         if reduce:
             out = out[:, 0]
-        print(out)
+        # print(out)
         return out
 
 

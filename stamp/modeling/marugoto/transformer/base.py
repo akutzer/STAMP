@@ -74,10 +74,41 @@ def cox_loss_breslow(event_time, event, estimate, reduce="mean"):
 
 
 
+def softmax_(estimate, dim=-1):
+    assert dim == -1
+    estimate_ = F.pad(estimate, (0, 1),  "constant", 0)
+    return torch.softmax(estimate_, dim=-1)
+
+
+def logistic_hazard_loss(event_time, event, estimate, reduce="mean"):
+    B = estimate.shape[0]
+    event = event.float()
+    event_time = event_time.int()
+
+    estimate_ = softmax_(estimate)
+    estimate_cum = torch.cumsum(estimate_, dim=-1)
+    # print(event_time.shape, event.shape, estimate.shape, estimate_.shape, estimate_cum.shape)
+
+    # CHECK IF CORRECT!!!
+    likelihood = - (
+        event * torch.log(estimate_[torch.arange(B), event_time])
+        + (1 - event) * torch.log(1 - estimate_cum[torch.arange(B), event_time])
+    )
+
+    if reduce == "mean":
+        loss = torch.mean(likelihood)
+    elif reduce == "sum":
+        loss = torch.sum(likelihood)
+
+    return loss
+
+
 def cox_loss_fn(y_pred, y_true, reduce="mean"):
     event_time, event = y_true[:, 0], y_true[:, 1].type(torch.bool)
-    estimate = y_pred[:, 0]
-    return cox_loss_breslow(event_time, event, estimate, reduce)
+    # estimate = y_pred[:, 0]
+    # return cox_loss_breslow(event_time, event, estimate, reduce)
+    estimate = y_pred
+    return logistic_hazard_loss(event_time, event, estimate, reduce)
 
 
 def concordance_index(event_time, event, estimate):
@@ -126,7 +157,7 @@ class SurvivalMetric(Metric):
         "Store targs and preds"
         self.event_times.append(targs[:, 0].cpu())
         self.events.append(targs[:, 1].cpu())
-        self.estimates.append(preds[:, 0].cpu())
+        self.estimates.append(preds.cpu())
 
     def __call__(self, preds, targs):
         "Calculate metric on one batch of data"
@@ -240,15 +271,15 @@ def train(
         loss_func=loss_func,
         opt_func = partial(OptimWrapper, opt=torch.optim.AdamW),
         metrics=[
-            SurvivalMetric(cox_loss_breslow),
+            # SurvivalMetric(logistic_hazard_loss),
             SurvivalMetric(concordance_index),
         ],
         path=path,
     )#.to_bf16()
 
     cbs = [
-        SaveModelCallback(monitor='cox_loss', fname=f'best_valid'),
-        EarlyStoppingCallback(monitor='cox_loss', patience=patience),
+        SaveModelCallback(monitor='valid_loss', fname=f'best_valid'),
+        EarlyStoppingCallback(monitor='valid_loss', patience=patience),
         CSVLogger(),
         # MixedPrecision(amp_mode=AMPMode.BF16)
     ]
