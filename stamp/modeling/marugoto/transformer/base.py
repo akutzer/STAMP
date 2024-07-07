@@ -52,7 +52,7 @@ class L1Regularizer(nn.Module):
         return self.module(*args, **kwargs)
 
 
-def cox_loss(event_time, event, estimate, reduce="mean"):
+def cox_loss_breslow(event_time, event, estimate, reduce="mean"):
     # TODO: harden for the case if there are no uncensored patients
     B = estimate.shape[0]
 
@@ -73,10 +73,11 @@ def cox_loss(event_time, event, estimate, reduce="mean"):
     return loss
 
 
+
 def cox_loss_fn(y_pred, y_true, reduce="mean"):
     event_time, event = y_true[:, 0], y_true[:, 1].type(torch.bool)
     estimate = y_pred[:, 0]
-    return cox_loss(event_time, event, estimate, reduce)
+    return cox_loss_breslow(event_time, event, estimate, reduce)
 
 
 def concordance_index(event_time, event, estimate):
@@ -251,7 +252,7 @@ def train(
         CSVLogger(),
         # MixedPrecision(amp_mode=AMPMode.BF16)
     ]
-    learn.fit_one_cycle(n_epoch=n_epoch, reset_opt=True, lr_max=1e-4, wd=1e-2, cbs=cbs)
+    learn.fit_one_cycle(n_epoch=n_epoch, reset_opt=True, lr_max=1e-4, wd=1e-3, cbs=cbs, pct_start=1/10)
     
     # Plot training and validation losses as well as learning rate schedule
     if plot:
