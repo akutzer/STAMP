@@ -14,7 +14,7 @@ from fastai.vision.learner import load_learner
 import torch
 
 from .base import train, deploy
-from .data import get_cohort_df, get_target_enc, SKLearnEncoder, DummyLabelTransform
+from .data import get_cohort_df, get_target_enc, SKLearnEncoder, DummyLabelTransform, DiscreteTimeTransform
 
 __all__ = [
     'train_categorical_model_', 'deploy_categorical_model_', 'categorical_crossval_']
@@ -49,6 +49,7 @@ def train_categorical_model_(
     output_path: PathLike,
     *,
     target_label: str,
+    method: str,
     cat_labels: Sequence[str] = [],
     cont_labels: Sequence[str] = [],
     categories: Optional[Iterable[str]] = None,
@@ -95,7 +96,7 @@ def train_categorical_model_(
     #     k: int(v) for k, v in df[target_label].value_counts().items()}}
     
     # Split off validation set
-    event_label = target_label[1]
+    time_label, event_label = target_label
     train_patients, valid_patients = train_test_split(df.PATIENT, stratify=df[event_label], random_state=1337)
     train_df = df[df.PATIENT.isin(train_patients)]
     valid_df = df[df.PATIENT.isin(valid_patients)]
@@ -111,7 +112,14 @@ def train_categorical_model_(
         json.dump(info, f)
 
     # target_enc = OneHotEncoder(sparse_output=False).fit(categories.reshape(-1, 1))
-    target_enc = DummyLabelTransform()
+    if method == "cox":
+        target_enc = DummyLabelTransform()
+    elif method == "logistic-hazard":
+        target_enc = DiscreteTimeTransform(5)
+        target_enc.fit_transform(
+            np.stack((df[time_label].values, df[event_label].values), axis=-1)
+        )
+
 
     add_features = []
     if cat_labels: add_features.append((_make_cat_enc(train_df, cat_labels), df[cat_labels].values))
@@ -208,6 +216,7 @@ def categorical_crossval_(
     clini_table: PathLike, slide_table: PathLike, feature_dir: PathLike, output_path: PathLike,
     *,
     target_label: str,
+    methode: str,
     cat_labels: Sequence[str] = [],
     cont_labels: Sequence[str] = [],
     n_splits: int = 5,

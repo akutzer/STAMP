@@ -210,7 +210,7 @@ def train(
 
     # for binary classification num_classes=2
     model = TransMIL(
-        num_classes=len(target_enc.categories_[0]), input_dim=feature_dim,
+        num_classes=len(target_enc.categories_), input_dim=feature_dim,
         dim=512, depth=2, heads=8, mlp_dim=512, dropout=.0
     )
     model = L1Regularizer(model, weight_decay=1e-3)
@@ -229,7 +229,7 @@ def train(
     # weight /= weight.sum()
     # # reorder according to vocab
     # weight = torch.tensor(
-    #     list(map(weight.get, target_enc.categories_[0])), dtype=torch.float32, device=device)
+    #     list(map(weight.get, target_enc.categories_)), dtype=torch.float32, device=device)
     loss_func = cox_loss_fn
 
     dls = DataLoaders(train_dl, valid_dl, device=device)
@@ -240,7 +240,7 @@ def train(
         loss_func=loss_func,
         opt_func = partial(OptimWrapper, opt=torch.optim.AdamW),
         metrics=[
-            SurvivalMetric(cox_loss),
+            SurvivalMetric(cox_loss_breslow),
             SurvivalMetric(concordance_index),
         ],
         path=path,
@@ -284,7 +284,7 @@ def deploy(
     if cont_labels is None: cont_labels = learn.cont_labels
 
     target_enc = learn.dls.dataset._datasets[-1].encode
-    categories = target_enc.categories_[0]
+    categories = target_enc.categories_
     add_features = []
     if cat_labels:
         cat_enc = learn.dls.dataset._datasets[-2]._datasets[0].encode
