@@ -240,15 +240,15 @@ def train(
         loss_func=loss_func,
         opt_func = partial(OptimWrapper, opt=torch.optim.AdamW),
         metrics=[
-            SurvivalMetric(cox_loss),
+            SurvivalMetric(cox_loss_breslow),
             SurvivalMetric(concordance_index),
         ],
         path=path,
     )#.to_bf16()
 
     cbs = [
-        SaveModelCallback(monitor='cox_loss', fname=f'best_valid'),
-        EarlyStoppingCallback(monitor='cox_loss', patience=patience),
+        SaveModelCallback(monitor='cox_loss_breslow', fname=f'best_valid'),
+        EarlyStoppingCallback(monitor='cox_loss_breslow', patience=patience),
         CSVLogger(),
         # MixedPrecision(amp_mode=AMPMode.BF16)
     ]
