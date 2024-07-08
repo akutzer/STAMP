@@ -80,7 +80,7 @@ def softmax_(estimate, dim=-1):
     return torch.softmax(estimate_, dim=-1)
 
 
-def logistic_hazard_loss(event_time, event, estimate, reduce="mean"):
+def logistic_pdf_loss(event_time, event, estimate, reduce="mean"):
     B = estimate.shape[0]
     event = event.float()
     event_time = event_time.int()
@@ -103,6 +103,30 @@ def logistic_hazard_loss(event_time, event, estimate, reduce="mean"):
     return loss
 
 
+def logistic_hazard_loss(event_time, event, estimate, reduce="mean"):
+    B = estimate.shape[0]
+    event = event.float()
+    event_time = event_time.int()
+
+    estimate_ = torch.sigmoid(estimate)
+    estimate_cum = torch.cumsum(torch.log(1 - F.pad(estimate_, (1, 0))), dim=-1)
+    # print(event_time.shape, event.shape, estimate.shape, estimate_.shape, estimate_cum.shape)
+
+    # CHECK IF CORRECT!!!
+    likelihood = - (
+        event * torch.log(estimate_[torch.arange(B), event_time])
+        + (1 - event) * torch.log(1 - estimate_[torch.arange(B), event_time])
+        + estimate_cum[torch.arange(B), event_time]
+    )
+
+    if reduce == "mean":
+        loss = torch.mean(likelihood)
+    elif reduce == "sum":
+        loss = torch.sum(likelihood)
+
+    return loss
+
+
 def cox_loss_fn(y_pred, y_true, reduce="mean"):
     event_time, event = y_true[:, 0], y_true[:, 1].type(torch.bool)
     # estimate = y_pred[:, 0]
@@ -112,6 +136,40 @@ def cox_loss_fn(y_pred, y_true, reduce="mean"):
 
 
 def concordance_index(event_time, event, estimate):
+    # event_time, event = y_true[:, 0], y_true[:, 1].type(torch.bool)
+    # estimate = y_pred[:, 0]
+    B = estimate.shape[0]
+    # print(estimate)
+    # replace with mean residual life or median?
+    estimate_ = torch.sigmoid(estimate)
+    estimate_ = torch.prod(1 - estimate_, dim=-1)
+    # estimate_ = torch.cumprod(1 - estimate_, dim=-1)
+    # estimate_ = torch.argmax((estimate_ <= .5).float(), dim=-1)
+
+
+    comparable = (
+        # both of them experienced an event (at different times)
+        (event_time[:, None] < event_time) & (event[:, None] & event)
+        |  # or
+        # the one with a shorter observed survival time experienced an event,
+        # in which case the event-free patient “outlived” the other
+        ((event_time[:, None] < event_time) & (event[:, None] & (~event)))
+    )  
+    
+    idx = torch.where(comparable)
+    # extract the relative risk scores (in log space) for comparable patients
+    risk1 = estimate_[idx[0]]
+    risk2 = estimate_[idx[1]]
+    # patient 1, who experienced an event earlier than patient 2, should have
+    # a higher predicted relative risk score (in log space)
+    ci = torch.mean((risk1 < risk2).float())
+
+    # ci2 = concordance_index_censored(event, event_time, estimate)
+
+    return ci
+
+
+def concordance_index_cox(event_time, event, estimate):
     # event_time, event = y_true[:, 0], y_true[:, 1].type(torch.bool)
     # estimate = y_pred[:, 0]
     B = estimate.shape[0]

@@ -115,7 +115,7 @@ def train_categorical_model_(
     if method == "cox":
         target_enc = DummyLabelTransform()
     elif method == "logistic-hazard":
-        target_enc = DiscreteTimeTransform(5)
+        target_enc = DiscreteTimeTransform(10)
         target_enc.fit_transform(
             np.stack((df[time_label].values, df[event_label].values), axis=-1)
         )
