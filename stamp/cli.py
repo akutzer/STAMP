@@ -178,7 +178,7 @@ def run_cli(args: argparse.Namespace):
         case "train":
             require_configs(
                 cfg,
-                ["clini_table", "slide_table", "output_dir", "feature_dir", "target_label", "cat_labels", "cont_labels", "method"],
+                ["clini_table", "slide_table", "output_dir", "feature_dir", "target_label", "cat_labels", "cont_labels", "method", "num_bins"],
                 prefix="modeling",
                 paths_to_check=["clini_table", "slide_table", "feature_dir"]
             )
@@ -192,7 +192,8 @@ def run_cli(args: argparse.Namespace):
                                      cat_labels=c.cat_labels,
                                      cont_labels=c.cont_labels, 
                                      categories=c.categories,
-                                     method=c.method)
+                                     method=c.method.lower(),
+                                     num_bins=c.num_bins)
         case "crossval":
             require_configs(
                 cfg,
@@ -233,7 +234,7 @@ def run_cli(args: argparse.Namespace):
         case "statistics":
             require_configs(
                 cfg,
-                ["pred_csvs", "target_label", "true_class", "output_dir"],
+                ["pred_csvs", "method", "output_dir"],
                 prefix="modeling.statistics",
                 paths_to_check=["pred_csvs"]
             )
@@ -242,9 +243,8 @@ def run_cli(args: argparse.Namespace):
             if isinstance(c.pred_csvs,str):
                 c.pred_csvs = [c.pred_csvs]
             compute_stats(pred_csvs=[Path(x) for x in c.pred_csvs],
-                          target_label=c.target_label,
-                          true_class=c.true_class,
-                          output_dir=Path(c.output_dir))
+                          output_dir=Path(c.output_dir),
+                          method=c.method)
             print("Successfully calculated statistics")
         case "heatmaps":
             require_configs(

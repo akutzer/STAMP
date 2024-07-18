@@ -199,14 +199,12 @@ class DummyLabelTransform():
 
 
 class DiscreteTimeTransform():
-    def __init__(self, num_bins: int = 1, scheme='equidistant'):
+    def __init__(self, num_bins: int = 1, scheme='quantiles'): # ' equidistant'
         self.transform_ = LogisticHazard.label_transform(num_bins, scheme=scheme)
-        self.categories_ = []
     
     def fit_transform(self, labels):
         durations, events = labels[..., 0], labels[..., 1]
         fit = self.transform_.fit_transform(durations, events)
-        self.categories_ = self.transform_.cuts
         return fit
     
     def transform(self, labels):
@@ -220,6 +218,9 @@ class DiscreteTimeTransform():
             out = out[:, 0]
         # print(out)
         return out
+    
+    @property
+    def categories_(self):  return self.transform_.cuts
 
 
 

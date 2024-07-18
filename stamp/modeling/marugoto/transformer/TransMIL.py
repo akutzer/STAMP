@@ -125,8 +125,16 @@ class TransMIL(nn.Module):
 
         self.pool = pool
         self.mlp_head = nn.Sequential(
-            nn.Linear(dim, num_classes)
+            nn.Linear(dim, dim//2),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.LayerNorm(dim//2),
+            nn.Linear(dim//2, num_classes)
         )
+
+        # self.mlp_head = nn.Sequential(
+        #     nn.Linear(dim, num_classes)
+        # )
 
     def forward(self, x, lens):
         # remove unnecessary padding

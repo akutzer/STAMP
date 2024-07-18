@@ -15,8 +15,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 from sksurv.metrics import concordance_index_censored
 
+
 from .data import make_dataset, SKLearnEncoder
 from .TransMIL import TransMIL
+
+from .metric import *
 
 
 __all__ = ['train', 'deploy']
@@ -52,207 +55,19 @@ class L1Regularizer(nn.Module):
         return self.module(*args, **kwargs)
 
 
-def cox_loss_breslow(event_time, event, estimate, reduce="mean"):
-    # TODO: harden for the case if there are no uncensored patients
-    B = estimate.shape[0]
-
-    # determine all R patients, which are not censored
-    uncensored_time = event_time[event]  # shape: (R,)
-
-    # mask for filtering out all patient that already had the event
-    mask = (uncensored_time[:, None] <= event_time)  # shape: (R, B)
-
-    # calculate the negative log partial likelihood
-    partial_like = - (estimate[event] - torch.log(torch.sum(mask * torch.exp(estimate), axis=-1)))
-
-    if reduce == "mean":
-        loss = torch.mean(partial_like)
-    elif reduce == "sum":
-        loss = torch.sum(partial_like)
-
-    return loss
-
-
-
-def softmax_(estimate, dim=-1):
-    assert dim == -1
-    estimate_ = F.pad(estimate, (0, 1),  "constant", 0)
-    return torch.softmax(estimate_, dim=-1)
-
-
-def logistic_pdf_loss(event_time, event, estimate, reduce="mean"):
-    B = estimate.shape[0]
-    event = event.float()
-    event_time = event_time.int()
-
-    estimate_ = softmax_(estimate)
-    estimate_cum = torch.cumsum(estimate_, dim=-1)
-    # print(event_time.shape, event.shape, estimate.shape, estimate_.shape, estimate_cum.shape)
-
-    # CHECK IF CORRECT!!!
-    likelihood = - (
-        event * torch.log(estimate_[torch.arange(B), event_time])
-        + (1 - event) * torch.log(1 - estimate_cum[torch.arange(B), event_time])
-    )
-
-    if reduce == "mean":
-        loss = torch.mean(likelihood)
-    elif reduce == "sum":
-        loss = torch.sum(likelihood)
-
-    return loss
-
-
-def logistic_hazard_loss(event_time, event, estimate, reduce="mean"):
-    B = estimate.shape[0]
-    event = event.float()
-    event_time = event_time.int()
-
-    estimate_ = torch.sigmoid(estimate)
-    estimate_cum = torch.cumsum(torch.log(1 - F.pad(estimate_, (1, 0))), dim=-1)
-    # print(event_time.shape, event.shape, estimate.shape, estimate_.shape, estimate_cum.shape)
-
-    # CHECK IF CORRECT!!!
-    likelihood = - (
-        event * torch.log(estimate_[torch.arange(B), event_time])
-        + (1 - event) * torch.log(1 - estimate_[torch.arange(B), event_time])
-        + estimate_cum[torch.arange(B), event_time]
-    )
-
-    if reduce == "mean":
-        loss = torch.mean(likelihood)
-    elif reduce == "sum":
-        loss = torch.sum(likelihood)
-
-    return loss
-
-
-def cox_loss_fn(y_pred, y_true, reduce="mean"):
-    event_time, event = y_true[:, 0], y_true[:, 1].type(torch.bool)
-    # estimate = y_pred[:, 0]
-    # return cox_loss_breslow(event_time, event, estimate, reduce)
-    estimate = y_pred
-    return logistic_hazard_loss(event_time, event, estimate, reduce)
-
-
-def concordance_index(event_time, event, estimate):
-    # event_time, event = y_true[:, 0], y_true[:, 1].type(torch.bool)
-    # estimate = y_pred[:, 0]
-    B = estimate.shape[0]
-    # print(estimate)
-    # replace with mean residual life or median?
-    estimate_ = torch.sigmoid(estimate)
-    estimate_ = torch.prod(1 - estimate_, dim=-1)
-    # estimate_ = torch.cumprod(1 - estimate_, dim=-1)
-    # estimate_ = torch.argmax((estimate_ <= .5).float(), dim=-1)
-
-
-    comparable = (
-        # both of them experienced an event (at different times)
-        (event_time[:, None] < event_time) & (event[:, None] & event)
-        |  # or
-        # the one with a shorter observed survival time experienced an event,
-        # in which case the event-free patient “outlived” the other
-        ((event_time[:, None] < event_time) & (event[:, None] & (~event)))
-    )  
-    
-    idx = torch.where(comparable)
-    # extract the relative risk scores (in log space) for comparable patients
-    risk1 = estimate_[idx[0]]
-    risk2 = estimate_[idx[1]]
-    # patient 1, who experienced an event earlier than patient 2, should have
-    # a higher predicted relative risk score (in log space)
-    ci = torch.mean((risk1 < risk2).float())
-
-    # ci2 = concordance_index_censored(event, event_time, estimate)
-
-    return ci
-
-
-def concordance_index_cox(event_time, event, estimate):
-    # event_time, event = y_true[:, 0], y_true[:, 1].type(torch.bool)
-    # estimate = y_pred[:, 0]
-    B = estimate.shape[0]
-
-    comparable = (
-        # both of them experienced an event (at different times)
-        (event_time[:, None] < event_time) & (event[:, None] & event)
-        |  # or
-        # the one with a shorter observed survival time experienced an event,
-        # in which case the event-free patient “outlived” the other
-        ((event_time[:, None] < event_time) & (event[:, None] & (~event)))
-    )  
-    
-    idx = torch.where(comparable)
-    # extract the relative risk scores (in log space) for comparable patients
-    risk1 = estimate[idx[0]]
-    risk2 = estimate[idx[1]]
-    # patient 1, who experienced an event earlier than patient 2, should have
-    # a higher predicted relative risk score (in log space)
-    ci = torch.mean((risk1 > risk2).float())
-
-    # ci2 = concordance_index_censored(event, event_time, estimate)
-
-    return ci
-    
-
-class SurvivalMetric(Metric):
-    "Stores predictions and targets on CPU in accumulate to perform final calculations with `func`."
-    def __init__(self, func, **kwargs):
-        self.func = func
-        self.func_kwargs = kwargs
-        self._name = self.func.__name__
-
-    def reset(self):
-        "Clear all stores values"
-        self.event_times, self.events, self.estimates = [], [], []
-
-    def accumulate(self, learn):
-        "Store targs and preds from `learn`, using activation function and argmax as appropriate"
-        self.accum_values(learn.pred.detach(), learn.y.detach())
-
-    def accum_values(self, preds, targs):
-        "Store targs and preds"
-        self.event_times.append(targs[:, 0].cpu())
-        self.events.append(targs[:, 1].cpu())
-        self.estimates.append(preds.cpu())
-
-    def __call__(self, preds, targs):
-        "Calculate metric on one batch of data"
-        self.reset()
-        self.accum_values(preds.detach(), targs.detach())
-        return self.value
-
-    @property
-    def value(self):
-        "Value of the metric using accumulated preds and targs"
-        if len(self.estimates) == 0: return
-
-        self.event_times = torch.cat(self.event_times)
-        self.events = torch.cat(self.events).type(torch.bool)
-        self.estimates = torch.cat(self.estimates)
-
-        return self.func(self.event_times, self.events, self.estimates, **self.func_kwargs)
-
-    @property
-    def name(self):  return self._name
-
-    @name.setter
-    def name(self, value): self._name = value
-
-
 def train(
     *,
     bags: Sequence[Iterable[Path]],
     targets: Tuple[SKLearnEncoder, np.ndarray],
     add_features: Iterable[Tuple[SKLearnEncoder, Sequence[Any]]] = [],
     valid_idxs: np.ndarray,
-    n_epoch: int = 32,
+    n_epoch: int = 100,
     patience: int = 10,
     path: Optional[Path] = None,
-    batch_size: int = 128,
+    batch_size: int = 100,
     cores: int = 8,
-    plot: bool = True
+    plot: bool = True,
+    method: str = "cox"
 ) -> Learner:
     """Train a MLP on image features.
 
@@ -284,6 +99,20 @@ def train(
             for enc, vals in add_features],
         bag_size=None)
 
+    
+    # print(valid_ds)
+    # print(valid_ds._datasets)
+    event_time, event = targs[valid_idxs][:, 0], targs[valid_idxs][:, 1].astype(np.bool_)
+    comparable = (event_time[:, None] < event_time) & (event[:, None])
+
+    c = comparable.sum()
+    n, k = targs.shape[0], event.sum()
+    print(f"Fraction of comparable pairs given maximal number of comparable pairs when {k} patients had an events:")
+    print(c / (- .5*k * (k - 2*n + 1)))
+
+    print(f"Fraction of comparable pairs given maximal number of comparable pairs when all patients are comparable pairs:")
+    print(c / (n * (n - 1)))
+
     # build dataloaders
     train_dl = DataLoader(
         train_ds, batch_size=batch_size, shuffle=True, num_workers=cores,
@@ -300,9 +129,9 @@ def train(
     # for binary classification num_classes=2
     model = TransMIL(
         num_classes=len(target_enc.categories_), input_dim=feature_dim,
-        dim=512, depth=2, heads=8, mlp_dim=512, dropout=.0
+        dim=512, depth=2, heads=8, mlp_dim=512, dropout=.1
     )
-    model = L1Regularizer(model, weight_decay=1e-3)
+    # model = L1Regularizer(model, weight_decay=1e-3)
     # TODO:
     # maybe increase mlp_dim? Not necessary 4*dim, but maybe a bit?
     # maybe add at least some dropout?
@@ -319,29 +148,52 @@ def train(
     # # reorder according to vocab
     # weight = torch.tensor(
     #     list(map(weight.get, target_enc.categories_)), dtype=torch.float32, device=device)
-    loss_func = cox_loss_fn
+    
 
     dls = DataLoaders(train_dl, valid_dl, device=device)
 
+    if method == "cox":
+        criterion = CoxLossBreslow()
+        metrics = [
+            SurvivalMetric(criterion.cox_loss_breslow),
+            SurvivalMetric(ConcordanceIndex("cox")),            
+        ]
+        monitor = criterion.cox_loss_breslow.__name__
+    elif method == "logistic-hazard":
+        criterion = LogisticHazardLoss()
+        metrics = [
+            SurvivalMetric(ConcordanceIndex("mrl", intervals=target_enc.categories_)),
+            SurvivalMetric(ConcordanceIndex("isurv", intervals=target_enc.categories_))
+        ]
+        monitor = "valid_loss"
+    elif method == "mrl":
+        criterion = MRLLoss(target_enc.categories_)
+        metrics = [
+            SurvivalMetric(criterion.negative_concordance_index_mrl),
+            SurvivalMetric(ConcordanceIndex("mrl", intervals=target_enc.categories_)),
+            SurvivalMetric(ConcordanceIndex("isurv", intervals=target_enc.categories_))
+        ]
+        monitor = criterion.negative_concordance_index_mrl.__name__
+    else:
+        raise ValueError
+    
     learn = Learner(
         dls,
         model,
-        loss_func=loss_func,
+        loss_func=criterion,
         opt_func = partial(OptimWrapper, opt=torch.optim.AdamW),
-        metrics=[
-            # SurvivalMetric(logistic_hazard_loss),
-            SurvivalMetric(concordance_index),
-        ],
+        metrics=metrics,
         path=path,
-    )#.to_bf16()
+    )
 
     cbs = [
-        SaveModelCallback(monitor='valid_loss', fname=f'best_valid'),
-        EarlyStoppingCallback(monitor='valid_loss', patience=patience),
+        SaveModelCallback(monitor=monitor, fname=f'best_valid'),
+        EarlyStoppingCallback(monitor=monitor, patience=patience),
         CSVLogger(),
         # MixedPrecision(amp_mode=AMPMode.BF16)
     ]
-    learn.fit_one_cycle(n_epoch=n_epoch, reset_opt=True, lr_max=1e-4, wd=1e-3, cbs=cbs, pct_start=1/10)
+    # learn.fit_one_cycle(n_epoch=n_epoch, reset_opt=True, lr_max=1e-4, wd=1e-3, cbs=cbs, pct_start=.05)
+    learn.fit(n_epoch=n_epoch, reset_opt=True, lr=1e-5, wd=1e-3, cbs=cbs)
     
     # Plot training and validation losses as well as learning rate schedule
     if plot:
@@ -352,9 +204,9 @@ def train(
         plt.savefig(path_plots / 'losses_plot.png')
         plt.close()
 
-        learn.recorder.plot_sched()
-        plt.savefig(path_plots / 'lr_scheduler.png')
-        plt.close()
+        # learn.recorder.plot_sched()
+        # plt.savefig(path_plots / 'lr_scheduler.png')
+        # plt.close()
 
     return learn
 

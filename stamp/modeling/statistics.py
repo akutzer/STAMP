@@ -5,10 +5,12 @@ import os
 from typing import Sequence
 import pandas as pd
 from matplotlib import pyplot as plt
+import torch
 
 from .marugoto.stats.categorical import categorical_aggregated_
 from .marugoto.visualizations.roc import plot_multiple_decorated_roc_curves, plot_single_decorated_roc_curve
 from .marugoto.visualizations.prc import plot_precision_recall_curves_, plot_single_decorated_prc_curve
+from .marugoto.transformer.metric import ConcordanceIndex
 
 def add_roc_curve_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument(
@@ -80,17 +82,29 @@ def read_table(file) -> pd.DataFrame:
     else:
         return pd.read_csv(file)
 
-def compute_stats(pred_csvs: Sequence[Path], target_label: str, true_class: str, output_dir: Path):
+
+def compute_stats(pred_csvs: Sequence[Path], output_dir: Path, method: str):
     # read all the patient preds
     # and transform their true / preds columns into np arrays
-    preds_dfs = [
-        pd.read_csv(p, dtype={f"{target_label}": str, "pred": str})
-        for p in pred_csvs
-    ]
+
+    pred_df = pd.concat([pd.read_csv(p) for p in pred_csvs])
+
+    if method == "cox":
+        event_time, event, estimate = pred_df["follow_up_years"].to_numpy(), pred_df["event"].to_numpy(), pred_df["Relative Risk"].to_numpy()
+        event_time, event, estimate = torch.from_numpy(event_time), torch.from_numpy(event), torch.from_numpy(estimate)
+        ci_fn = ConcordanceIndex("cox")
+
+        ci = ci_fn(event_time, event, estimate)
+        print(ci)
+    elif method == "cox":
+        raise NotImplementedError
+
+    exit(0)
     y_trues = [df[target_label] == true_class for df in preds_dfs]
     y_preds = [
         pd.to_numeric(df[f"{target_label}_{true_class}"]) for df in preds_dfs
     ]
+    
     n_bootstrap_samples = 1000
     figure_width = 3.8 # inches
     threshold_cmap= plt.get_cmap()
