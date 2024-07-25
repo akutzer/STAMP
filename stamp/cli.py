@@ -178,7 +178,7 @@ def run_cli(args: argparse.Namespace):
         case "train":
             require_configs(
                 cfg,
-                ["clini_table", "slide_table", "output_dir", "feature_dir", "target_label", "cat_labels", "cont_labels", "method", "num_bins"],
+                ["clini_table", "slide_table", "output_dir", "feature_dir", "target_label", "cat_labels", "cont_labels", "method", "num_bins", "aggregation"],
                 prefix="modeling",
                 paths_to_check=["clini_table", "slide_table", "feature_dir"]
             )
@@ -193,11 +193,12 @@ def run_cli(args: argparse.Namespace):
                                      cont_labels=c.cont_labels, 
                                      categories=c.categories,
                                      method=c.method.lower(),
-                                     num_bins=c.num_bins)
+                                     num_bins=c.num_bins,
+                                     aggregation=c.aggregation.lower())
         case "crossval":
             require_configs(
                 cfg,
-                ["clini_table", "slide_table", "output_dir", "feature_dir", "target_label", "cat_labels", "cont_labels", "n_splits", "method"], # this one requires the n_splits key!
+                ["clini_table", "slide_table", "output_dir", "feature_dir", "target_label", "cat_labels", "cont_labels", "n_splits", "method", "num_bins", "aggregation"], # this one requires the n_splits key!
                 prefix="modeling",
                 paths_to_check=["clini_table", "slide_table", "feature_dir"]
             )
@@ -212,7 +213,9 @@ def run_cli(args: argparse.Namespace):
                                   cont_labels=c.cont_labels,
                                   categories=c.categories,
                                   n_splits=c.n_splits,
-                                  method=c.method)
+                                  method=c.method,
+                                  num_bins=c.num_bins,
+                                  aggregation=c.aggregation.lower())
         case "deploy":
             require_configs(
                 cfg,

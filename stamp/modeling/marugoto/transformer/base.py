@@ -18,6 +18,7 @@ from sksurv.metrics import concordance_index_censored
 
 from .data import make_dataset, SKLearnEncoder
 from .TransMIL import TransMIL
+from .AttnMIL import AttnMIL
 
 from .metric import *
 
@@ -61,13 +62,14 @@ def train(
     targets: Tuple[SKLearnEncoder, np.ndarray],
     add_features: Iterable[Tuple[SKLearnEncoder, Sequence[Any]]] = [],
     valid_idxs: np.ndarray,
-    n_epoch: int = 100,
+    n_epoch: int = 1,
     patience: int = 10,
     path: Optional[Path] = None,
     batch_size: int = 100,
     cores: int = 8,
     plot: bool = True,
-    method: str = "cox"
+    method: str = "cox",
+    aggregation: str = "trans_mil"
 ) -> Learner:
     """Train a MLP on image features.
 
@@ -108,10 +110,10 @@ def train(
     c = comparable.sum()
     n, k = targs.shape[0], event.sum()
     print(f"Fraction of comparable pairs given maximal number of comparable pairs when {k} patients had an events:")
-    print(c / (- .5*k * (k - 2*n + 1)))
+    print(f"{c / (- .5*k * (k - 2*n + 1)):.4f}")
 
     print(f"Fraction of comparable pairs given maximal number of comparable pairs when all patients are comparable pairs:")
-    print(c / (n * (n - 1)))
+    print(f"{c / (n * (n - 1)):.4f}")
 
     # build dataloaders
     train_dl = DataLoader(
@@ -127,16 +129,19 @@ def train(
     feature_dim = batch[0].shape[-1]
 
     # for binary classification num_classes=2
-    model = TransMIL(
-        num_classes=len(target_enc.categories_), input_dim=feature_dim,
-        dim=512, depth=2, heads=8, mlp_dim=512, dropout=.1
-    )
+    if aggregation == "trans_mil":
+        model = TransMIL(
+            num_classes=len(target_enc.categories_), input_dim=feature_dim,
+            dim=512, depth=2, heads=8, mlp_dim=512, dropout=.1
+        )
+    elif aggregation == "attn_mil":
+        model = AttnMIL(
+            n_out=len(target_enc.categories_), n_feats=feature_dim
+        )
+    else:
+        raise ValueError(f"Unknown aggregation: {aggregation}. Must be either `trans_mil` or `attn_mil`")
     # model = L1Regularizer(model, weight_decay=1e-3)
-    # TODO:
-    # maybe increase mlp_dim? Not necessary 4*dim, but maybe a bit?
-    # maybe add at least some dropout?
     
-    # model = torch.compile(model)
     model.to(device)
     print(f"Model: {model}", end=" ")
     print(f"[Parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad)}]")
@@ -193,7 +198,7 @@ def train(
         # MixedPrecision(amp_mode=AMPMode.BF16)
     ]
     # learn.fit_one_cycle(n_epoch=n_epoch, reset_opt=True, lr_max=1e-4, wd=1e-3, cbs=cbs, pct_start=.05)
-    learn.fit(n_epoch=n_epoch, reset_opt=True, lr=1e-5, wd=1e-3, cbs=cbs)
+    learn.fit(n_epoch=n_epoch, reset_opt=True, lr=3e-5, wd=1e-3, cbs=cbs)
     
     # Plot training and validation losses as well as learning rate schedule
     if plot:
@@ -224,6 +229,7 @@ def deploy(
     if cat_labels is None: cat_labels = learn.cat_labels
     if cont_labels is None: cont_labels = learn.cont_labels
 
+    method = learn.method
     target_enc = learn.dls.dataset._datasets[-1].encode
     categories = target_enc.categories_
     add_features = []
@@ -251,10 +257,22 @@ def deploy(
         # target_label: test_df[target_label].values,
         **{f'{label}': test_df[label].values
             for label in target_label},
-        "Relative Risk (log)": patient_preds.flatten(),
-        "Relative Risk": np.exp(patient_preds).flatten(),
+        # "relative_log_risk": patient_preds.flatten(),
+        # "relative_risk": np.exp(patient_preds).flatten(),
     })
 
+    if method == "cox":
+        patient_preds_df["relative_log_risk"] = patient_preds.flatten()
+        patient_preds_df["relative_risk"] = np.exp(patient_preds).flatten()
+    elif method == "logistic-hazard":
+        intervals = target_enc.categories_
+        hazard = torch.sigmoid(patient_preds).cpu()
+        assert patient_preds.shape[-1] == len(intervals)
+        for i, t in enumerate(intervals):
+            patient_preds_df[f"{t}"] = hazard[:, i]
+        patient_preds_df["mean_residual_lifetime"] = calc_mrl(patient_preds, intervals)
+        patient_preds_df["integrated_survival"] = calc_isurv(patient_preds, intervals)
+        
     # calculate loss
     # patient_preds = patient_preds_df[[
     #     f'{target_label}_{cat}' for cat in categories]].values

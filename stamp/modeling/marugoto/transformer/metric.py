@@ -94,12 +94,12 @@ class LogisticHazardLoss(nn.Module):
         event_time = event_time.int()
 
         hazard = torch.sigmoid(estimate)
-        log_surivival = torch.cumsum(torch.log(1 - F.pad(hazard, (1, 0))), dim=-1)
+        log_survival = torch.cumsum(torch.log(1 - F.pad(hazard, (1, 0))), dim=-1)
 
         likelihood = - (
             event * torch.log(hazard[torch.arange(B), event_time])
             + (1 - event) * torch.log(1 - hazard[torch.arange(B), event_time])
-            + log_surivival[torch.arange(B), event_time]
+            + log_survival[torch.arange(B), event_time]
         )
 
         # alternative naive implementation, which highlights the similarity
@@ -169,14 +169,14 @@ class ConcordanceIndex():
     
     def __call__(self, event_time, event, estimate):
         if self.mode == "cox":
-            # use the relative risk scores (in log space) for CI
+            # use the relative_risk scores (in log space) for CI
             score = estimate
         elif self.mode == "mrl":
             # use mean residual lifetime for CI
-            score = self.calc_mrl(estimate, self.intervals)
+            score = calc_mrl(estimate, self.intervals)
         elif self.mode == "isurv":
             # use integrated survival for CI
-            score = self.calc_isurv(estimate, self.intervals)
+            score = calc_isurv(estimate, self.intervals)
         
         ci = self.calc_ci(event_time, event, score)
         return ci
@@ -192,7 +192,7 @@ class ConcordanceIndex():
     
         if self.mode in ["cox"]:
             # patient 1, who experienced an event earlier than patient 2, should have
-            # a higher predicted relative risk score (in log space)
+            # a higher predicted relative_risk score (in log space)
             ci = torch.mean((score1 > score2).float())
         elif self.mode in ["mrl", "isurv"]:
             # patient 1, who experienced an event earlier than patient 2, should have
@@ -202,27 +202,28 @@ class ConcordanceIndex():
             raise ValueError
             
         return ci
-    
-    def calc_isurv(self, estimate, intervals):
-        hazard = torch.sigmoid(estimate)
-        survival = torch.cumprod(1 - hazard, dim=-1)
 
-        times = torch.tensor(intervals, device=estimate.device)
-        integrated_survival = trapezoid(y=survival.cpu(), x=times.cpu())
-        integrated_survival = torch.from_numpy(integrated_survival)
 
-        return integrated_survival
-    
-    def calc_mrl(self, estimate, intervals):
-        hazard = torch.sigmoid(estimate)
-        survival = F.pad(torch.cumprod(1 - hazard, dim=-1), (1, 0), value=1)    
-        pdf = hazard * survival[..., :-1]
+def calc_isurv(estimate, intervals):
+    hazard = torch.sigmoid(estimate)
+    survival = torch.cumprod(1 - hazard, dim=-1)
 
-        # calculate mean residual lifetime, aka expected lifetime
-        times = torch.tensor(intervals, device=estimate.device)
-        mrl = torch.sum(times * pdf, axis=-1)
+    times = torch.tensor(intervals, device=estimate.device)
+    integrated_survival = trapezoid(y=survival.cpu(), x=times.cpu())
+    integrated_survival = torch.from_numpy(integrated_survival)
 
-        return mrl
+    return integrated_survival
+
+def calc_mrl(estimate, intervals):
+    hazard = torch.sigmoid(estimate)
+    survival = F.pad(torch.cumprod(1 - hazard, dim=-1), (1, 0), value=1)    
+    pdf = hazard * survival[..., :-1]
+
+    # calculate mean residual lifetime, aka expected lifetime
+    times = torch.tensor(intervals, device=estimate.device)
+    mrl = torch.sum(times * pdf, axis=-1)
+
+    return mrl
     
 
 
@@ -274,11 +275,11 @@ class ConcordanceIndex():
 #     comparable = (event_time[:, None] < event_time) & (event[:, None])
     
 #     idx = torch.where(comparable)
-#     # extract the relative risk scores (in log space) for comparable patients
+#     # extract the relative_risk scores (in log space) for comparable patients
 #     risk1 = estimate[idx[0]]
 #     risk2 = estimate[idx[1]]
 #     # patient 1, who experienced an event earlier than patient 2, should have
-#     # a higher predicted relative risk score (in log space)
+#     # a higher predicted relative_risk score (in log space)
 #     ci = torch.mean((risk1 > risk2).float())
 #     return ci
     

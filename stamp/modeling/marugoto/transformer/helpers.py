@@ -53,7 +53,8 @@ def train_categorical_model_(
     cat_labels: Sequence[str] = [],
     cont_labels: Sequence[str] = [],
     categories: Optional[Iterable[str]] = None,
-    num_bins: Optional[int] = None 
+    num_bins: Optional[int] = None,
+    aggregation: str = "trans_mil"
 ) -> None:
     """Train a categorical model on a cohort's tile's features.
 
@@ -134,12 +135,16 @@ def train_categorical_model_(
         valid_idxs=df.PATIENT.isin(valid_patients).values,
         path=output_path,
         cores=max(1, os.cpu_count() // 4),
-        method=method
+        method=method,
+        aggregation=aggregation
     )
 
     # save some additional information to the learner to make deployment easier
+    learn.method = method
+    learn.target_enc = target_enc
     learn.target_label = target_label
     learn.cat_labels, learn.cont_labels = cat_labels, cont_labels
+
 
     learn.export()
 
@@ -224,6 +229,8 @@ def categorical_crossval_(
     cont_labels: Sequence[str] = [],
     n_splits: int = 5,
     categories: Optional[Iterable[str]] = None,
+    num_bins: Optional[int] = None,
+    aggregation: str = "trans_mil"
 ) -> None:
     """Performs a cross-validation for a categorical target.
 
@@ -262,15 +269,15 @@ def categorical_crossval_(
     #     k: int(v) for k, v in df[target_label].value_counts().items()}}
 
     # target_enc = OneHotEncoder(sparse_output=False).fit(categories.reshape(-1, 1))
+    time_label, event_label = target_label
     if method == "cox":
         target_enc = DummyLabelTransform()
-    elif method in ["logistic-hazard", "bce"]:
+    elif method == "logistic-hazard":
         assert num_bins is not None
         target_enc = DiscreteTimeTransform(num_bins)
         target_enc.fit_transform(
             np.stack((df[time_label].values, df[event_label].values), axis=-1)
         )
-
 
     if (fold_path := output_path/'folds.pt').exists():
         folds = torch.load(fold_path)
@@ -305,7 +312,8 @@ def categorical_crossval_(
             learn = _crossval_train(
                 fold_path=fold_path, fold_df=fold_train_df, fold=fold, info=info,
                 target_label=target_label, target_enc=target_enc,
-                cat_labels=cat_labels, cont_labels=cont_labels, method=method)
+                cat_labels=cat_labels, cont_labels=cont_labels, method=method,
+                aggregation=aggregation)
             learn.export()
 
         fold_test_df = df.iloc[test_idxs]
@@ -317,14 +325,11 @@ def categorical_crossval_(
 
 
 def _crossval_train(
-    *, fold_path, fold_df, fold, info, target_label, target_enc, cat_labels, cont_labels, method
+    *, fold_path, fold_df, fold, info, target_label, target_enc, cat_labels, cont_labels, method, aggregation
 ):
     """Helper function for training the folds."""
     assert fold_df.PATIENT.nunique() == len(fold_df)
     fold_path.mkdir(exist_ok=True, parents=True)
-
-    # info['class distribution'][f'fold {fold}'] = {'overall': {
-    #     k: int(v) for k, v in fold_df[target_label].value_counts().items()}}
 
     event_label = target_label[1]
     train_patients, valid_patients = train_test_split(
@@ -333,11 +338,6 @@ def _crossval_train(
     valid_df = fold_df[fold_df.PATIENT.isin(valid_patients)]
     train_df.drop(columns='slide_path').to_csv(fold_path/'train.csv', index=False)
     valid_df.drop(columns='slide_path').to_csv(fold_path/'valid.csv', index=False)
-
-    # info['class distribution'][f'fold {fold}']['training'] = {
-    #     k: int(v) for k, v in train_df[target_label].value_counts().items()}
-    # info['class distribution'][f'fold {fold}']['validation'] = {
-    #     k: int(v) for k, v in valid_df[target_label].value_counts().items()}
 
     add_features = []
     if cat_labels: add_features.append((_make_cat_enc(train_df, cat_labels), fold_df[cat_labels].values))
@@ -350,8 +350,12 @@ def _crossval_train(
         valid_idxs=fold_df.PATIENT.isin(valid_patients),
         path=fold_path,
         cores=max(1, os.cpu_count() // 4),
-        method=method
+        method=method,
+        aggregation=aggregation
     )
+
+    learn.method = method
+    learn.target_enc = target_enc
     learn.target_label = target_label
     learn.cat_labels, learn.cont_labels = cat_labels, cont_labels
 

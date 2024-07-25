@@ -90,15 +90,22 @@ def compute_stats(pred_csvs: Sequence[Path], output_dir: Path, method: str):
     pred_df = pd.concat([pd.read_csv(p) for p in pred_csvs])
 
     if method == "cox":
-        event_time, event, estimate = pred_df["follow_up_years"].to_numpy(), pred_df["event"].to_numpy(), pred_df["Relative Risk"].to_numpy()
+        event_time, event, estimate = pred_df["follow_up_years"].to_numpy(), pred_df["event"].to_numpy(), pred_df["relative_risk"].to_numpy()
         event_time, event, estimate = torch.from_numpy(event_time), torch.from_numpy(event), torch.from_numpy(estimate)
         ci_fn = ConcordanceIndex("cox")
-
         ci = ci_fn(event_time, event, estimate)
-        print(ci)
-    elif method == "cox":
-        raise NotImplementedError
+        print(f"Concordance Index: {ci.item():.4f}")
+    elif method == "logistic-hazard":
+        event_time, event = pred_df["follow_up_years"].to_numpy(), pred_df["event"].to_numpy()
+        event_time, event = torch.from_numpy(event_time), torch.from_numpy(event)
 
+        mrl, isurv = pred_df["mean_residual_lifetime"].to_numpy(), pred_df["integrated_survival"].to_numpy()
+        mrl, isurv = torch.from_numpy(mrl), torch.from_numpy(isurv)
+
+        ci_mrl = ConcordanceIndex("mrl").calc_ci(event_time, event, mrl)
+        ci_isurv = ConcordanceIndex("isurv").calc_ci(event_time, event, isurv)
+        print(f"Concordance Index (MRL): {ci_mrl.item():.4f}")
+        print(f"Concordance Index (ISURV): {ci_isurv.item():.4f}")
     exit(0)
     y_trues = [df[target_label] == true_class for df in preds_dfs]
     y_preds = [
