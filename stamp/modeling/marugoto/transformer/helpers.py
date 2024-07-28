@@ -93,10 +93,6 @@ def train_categorical_model_(
     df, categories = get_cohort_df(clini_table, slide_table, feature_dir, target_label, categories)
     info['categories'] = list(categories)
 
-    # print('Overall distribution')
-    # info['class distribution'] = {'overall': {  # type: ignore
-    #     k: int(v) for k, v in df[target_label].value_counts().items()}}
-    
     # Split off validation set
     time_label, event_label = target_label
     train_patients, valid_patients = train_test_split(df.PATIENT, stratify=df[event_label], random_state=5, test_size=.2)
@@ -104,16 +100,10 @@ def train_categorical_model_(
     valid_df = df[df.PATIENT.isin(valid_patients)]
     train_df.drop(columns='slide_path').to_csv(output_path/'train.csv', index=False)
     valid_df.drop(columns='slide_path').to_csv(output_path/'valid.csv', index=False)
-
-    # info['class distribution']['training'] = {      # type: ignore
-    #     k: int(v) for k, v in train_df[target_label].value_counts().items()}
-    # info['class distribution']['validation'] = {    # type: ignore
-    #     k: int(v) for k, v in valid_df[target_label].value_counts().items()}
     
     with open(output_path/'info.json', 'w') as f:
         json.dump(info, f)
 
-    # target_enc = OneHotEncoder(sparse_output=False).fit(categories.reshape(-1, 1))
     if method == "cox":
         target_enc = DummyLabelTransform()
     elif method in ["logistic-hazard", "bce"]:
@@ -265,10 +255,6 @@ def categorical_crossval_(
     df, categories = get_cohort_df(clini_table, slide_table, feature_dir, target_label, categories)
     info['categories'] = list(categories)
 
-    # info['class distribution'] = {'overall': {
-    #     k: int(v) for k, v in df[target_label].value_counts().items()}}
-
-    # target_enc = OneHotEncoder(sparse_output=False).fit(categories.reshape(-1, 1))
     time_label, event_label = target_label
     if method == "cox":
         target_enc = DummyLabelTransform()
@@ -282,7 +268,6 @@ def categorical_crossval_(
     if (fold_path := output_path/'folds.pt').exists():
         folds = torch.load(fold_path)
     else:
-        #added shuffling with seed 1337
         skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=1337)
         patient_df = df.groupby('PATIENT').first().reset_index()
         event_label = target_label[1]
@@ -333,7 +318,8 @@ def _crossval_train(
 
     event_label = target_label[1]
     train_patients, valid_patients = train_test_split(
-        fold_df.PATIENT, stratify=fold_df[event_label], random_state=5, test_size=0.2)
+        fold_df.PATIENT, stratify=fold_df[event_label], random_state=5, test_size=0.2
+    )
     train_df = fold_df[fold_df.PATIENT.isin(train_patients)]
     valid_df = fold_df[fold_df.PATIENT.isin(valid_patients)]
     train_df.drop(columns='slide_path').to_csv(fold_path/'train.csv', index=False)

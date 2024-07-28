@@ -39,13 +39,6 @@ class CoxLossBreslow(nn.Module):
         return partial_like
 
 
-def softmax_(estimate, dim=-1):
-    assert dim == -1
-    # estimate_ = F.pad(estimate, (0, 1),  "constant", 0)
-    estimate_ = estimate
-    return torch.softmax(estimate_, dim=-1)
-
-
 class LogisticPDFLoss(nn.Module):
     def __init__(self, reduction="mean"):
         super().__init__()
@@ -61,8 +54,7 @@ class LogisticPDFLoss(nn.Module):
         event = event.float()
         event_time = event_time.int()
 
-        # TODO: check softmax_ or softmax
-        pdf = softmax_(estimate)
+        pdf = torch.softmax(estimate, dim=-1)
         cdf = torch.cumsum(pdf, dim=-1)
 
         likelihood = - (
@@ -224,64 +216,6 @@ def calc_mrl(estimate, intervals):
     mrl = torch.sum(times * pdf, axis=-1)
 
     return mrl
-    
-
-
-# def concordance_index_isurv(event_time, event, estimate, target_enc):
-#     hazard = torch.sigmoid(estimate)
-#     survival = torch.cumprod(1 - hazard, dim=-1)
-#     intervals = torch.tensor(target_enc.transform_.cuts, device=estimate.device)
-#     integrated_survival = trapezoid(y=survival.cpu().numpy(), x=intervals.cpu().numpy())
-#     integrated_survival = torch.from_numpy(integrated_survival)
-
-#     # the patient with a shorter observed survival time experienced an event,
-#     # and was “outlived” by the second patient (with might not even had an event
-#     comparable = (event_time[:, None] < event_time) & (event[:, None])
-    
-#     idx = torch.where(comparable)
-#     isurv1 = integrated_survival[idx[0]]
-#     isurv2 = integrated_survival[idx[1]]
-#     # patient 1, who experienced an event earlier than patient 2, should have
-#     # a smaller integrated surivial value
-#     ci = torch.mean((isurv1 < isurv2).float())
-#     return ci
-
-
-# def concordance_index_mrl(event_time, event, estimate, target_enc):
-#     hazard = torch.sigmoid(estimate)
-#     survival = F.pad(torch.cumprod(1 - hazard, dim=-1), (1, 0), value=1)    
-#     pdf = hazard * survival[..., :-1]
-
-#     # calculate mean residual lifetime, aka expected lifetime
-#     times = torch.tensor(target_enc.transform_.cuts, device=estimate.device)
-#     mrl = torch.sum(times * pdf, axis=-1)
-
-#     # the patient with a shorter observed survival time experienced an event,
-#     # and was “outlived” by the second patient (with might not even had an event
-#     comparable = (event_time[:, None] < event_time) & (event[:, None])
-    
-#     idx = torch.where(comparable)
-#     mrl1 = mrl[idx[0]]
-#     mrl2 = mrl[idx[1]]
-#     # patient 1, who experienced an event earlier than patient 2, should have
-#     # a smaller mean residual lifetime
-#     ci = torch.mean((mrl1 < mrl2).float())
-#     return ci
-
-
-# def concordance_index_cox(event_time, event, estimate):
-#     # the patient with a shorter observed survival time experienced an event,
-#     # and was “outlived” by the second patient (with might not even had an event
-#     comparable = (event_time[:, None] < event_time) & (event[:, None])
-    
-#     idx = torch.where(comparable)
-#     # extract the relative_risk scores (in log space) for comparable patients
-#     risk1 = estimate[idx[0]]
-#     risk2 = estimate[idx[1]]
-#     # patient 1, who experienced an event earlier than patient 2, should have
-#     # a higher predicted relative_risk score (in log space)
-#     ci = torch.mean((risk1 > risk2).float())
-#     return ci
     
 
 class SurvivalMetric(Metric):

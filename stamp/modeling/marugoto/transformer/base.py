@@ -62,7 +62,7 @@ def train(
     targets: Tuple[SKLearnEncoder, np.ndarray],
     add_features: Iterable[Tuple[SKLearnEncoder, Sequence[Any]]] = [],
     valid_idxs: np.ndarray,
-    n_epoch: int = 1,
+    n_epoch: int = 100,
     patience: int = 10,
     path: Optional[Path] = None,
     batch_size: int = 100,
@@ -101,12 +101,9 @@ def train(
             for enc, vals in add_features],
         bag_size=None)
 
-    
-    # print(valid_ds)
-    # print(valid_ds._datasets)
+
     event_time, event = targs[valid_idxs][:, 0], targs[valid_idxs][:, 1].astype(np.bool_)
     comparable = (event_time[:, None] < event_time) & (event[:, None])
-
     c = comparable.sum()
     n, k = targs.shape[0], event.sum()
     print(f"Fraction of comparable pairs given maximal number of comparable pairs when {k} patients had an events:")
@@ -145,15 +142,6 @@ def train(
     model.to(device)
     print(f"Model: {model}", end=" ")
     print(f"[Parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad)}]")
-
-    # # weigh inversely to class occurrences
-    # counts = pd.Series(targets[~valid_idxs]).value_counts()
-    # weight = counts.sum() / counts
-    # weight /= weight.sum()
-    # # reorder according to vocab
-    # weight = torch.tensor(
-    #     list(map(weight.get, target_enc.categories_)), dtype=torch.float32, device=device)
-    
 
     dls = DataLoaders(train_dl, valid_dl, device=device)
 
@@ -194,11 +182,10 @@ def train(
     cbs = [
         SaveModelCallback(monitor=monitor, fname=f'best_valid'),
         EarlyStoppingCallback(monitor=monitor, patience=patience),
-        CSVLogger(),
-        # MixedPrecision(amp_mode=AMPMode.BF16)
+        CSVLogger()
     ]
     # learn.fit_one_cycle(n_epoch=n_epoch, reset_opt=True, lr_max=1e-4, wd=1e-3, cbs=cbs, pct_start=.05)
-    learn.fit(n_epoch=n_epoch, reset_opt=True, lr=3e-5, wd=1e-3, cbs=cbs)
+    learn.fit(n_epoch=n_epoch, reset_opt=True, lr=5e-5, wd=1e-3, cbs=cbs)
     
     # Plot training and validation losses as well as learning rate schedule
     if plot:
@@ -209,10 +196,6 @@ def train(
         plt.savefig(path_plots / 'losses_plot.png')
         plt.close()
 
-        # learn.recorder.plot_sched()
-        # plt.savefig(path_plots / 'lr_scheduler.png')
-        # plt.close()
-
     return learn
 
 
@@ -222,9 +205,7 @@ def deploy(
     cat_labels: Optional[Sequence[str]] = None, cont_labels: Optional[Sequence[str]] = None,
 ) -> pd.DataFrame:
     assert test_df.PATIENT.nunique() == len(test_df), 'duplicate patients!'
-    #assert (len(add_label)
-    #        == (n := len(learn.dls.train.dataset._datasets[-2]._datasets))), \
-    #    f'not enough additional feature labels: expected {n}, got {len(add_label)}'
+
     if target_label is None: target_label = learn.target_label
     if cat_labels is None: cat_labels = learn.cat_labels
     if cont_labels is None: cont_labels = learn.cont_labels
@@ -246,19 +227,14 @@ def deploy(
         add_features=add_features,
         bag_size=None)
 
-    test_dl = DataLoader(
-        test_ds, batch_size=1, shuffle=False, num_workers=8)
-
+    test_dl = DataLoader(test_ds, batch_size=1, shuffle=False, num_workers=8)
     patient_preds, patient_targs = learn.get_preds(dl=test_dl, act=lambda x: x)
 
     # make into DF w/ ground truth
     patient_preds_df = pd.DataFrame.from_dict({
         'PATIENT': test_df.PATIENT.values,
-        # target_label: test_df[target_label].values,
         **{f'{label}': test_df[label].values
             for label in target_label},
-        # "relative_log_risk": patient_preds.flatten(),
-        # "relative_risk": np.exp(patient_preds).flatten(),
     })
 
     if method == "cox":
@@ -273,25 +249,5 @@ def deploy(
         patient_preds_df["mean_residual_lifetime"] = calc_mrl(patient_preds, intervals)
         patient_preds_df["integrated_survival"] = calc_isurv(patient_preds, intervals)
         
-    # calculate loss
-    # patient_preds = patient_preds_df[[
-    #     f'{target_label}_{cat}' for cat in categories]].values
-    # patient_targs = target_enc.transform(
-    #     patient_preds_df[target_label].values.reshape(-1, 1))
-    # patient_preds_df['loss'] = F.cross_entropy(
-    #     torch.tensor(patient_preds), torch.tensor(patient_targs),
-    #     reduction='none')
-
-    # patient_preds_df['pred'] = categories[patient_preds]
-
-    # reorder dataframe and sort by loss (best predictions first)
-    # patient_preds_df = patient_preds_df[[
-    #     'PATIENT',
-    #     *target_label,
-    #     'pred',
-    #     # 'loss'
-    # ]]
-
     patient_preds_df = patient_preds_df.sort_values(by='PATIENT')
-
     return patient_preds_df
