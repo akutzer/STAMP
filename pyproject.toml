@@ -41,7 +41,9 @@ dependencies = [
   "numba~=0.58",
   "gdown~=4.7",
   "openpyxl~=3.1",
-  "UNI@git+https://github.com/mahmoodlab/UNI.git"
+  "UNI@git+https://github.com/mahmoodlab/UNI.git",
+  "pycox~=0.2.3",
+  "scikit-survival~=0.23"
 ]
 
 [project.scripts]

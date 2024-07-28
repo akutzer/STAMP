@@ -35,43 +35,6 @@ class FeedForward(nn.Module):
         return self.mlp(x)
 
 
-# class Attention(nn.Module):
-#     def __init__(self, dim, heads=8, dim_head=512 // 8, norm_layer=nn.LayerNorm, dropout=0.):
-#         super().__init__()
-#         inner_dim = dim_head * heads
-#         project_out = heads != 1 or dim_head != dim
-
-#         self.heads = heads
-#         self.scale = dim_head ** -0.5
-
-#         self.norm = norm_layer(dim)
-
-#         self.to_qkv = nn.Linear(dim, inner_dim * 3, bias=False)
-#         self.to_out = nn.Sequential(
-#             nn.Linear(inner_dim, dim),
-#             nn.Dropout(dropout)
-#         ) if project_out else nn.Identity()
-
-#     def forward(self, x, mask=None):
-#         x = self.norm(x)
-
-#         qkv = self.to_qkv(x).chunk(3, dim=-1)
-#         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=self.heads), qkv)
-#         dots = (q @ k.mT) * self.scale
-
-#         if mask is not None:
-#             mask_value = torch.finfo(dots.dtype).min
-#             dots.masked_fill_(mask, mask_value)
-
-#         # improve numerical stability of softmax
-#         dots = dots - torch.amax(dots, dim=-1, keepdim=True)
-#         attn = F.softmax(dots, dim=-1)
-
-#         out = attn @ v
-#         out = rearrange(out, 'b h n d -> b n (h d)')
-#         return self.to_out(out), attn
-
-
 class Attention(nn.Module):
     def __init__(self, dim, heads=8, dim_head=512 // 8, norm_layer=nn.LayerNorm, dropout=0.):
         super().__init__()
@@ -125,8 +88,16 @@ class TransMIL(nn.Module):
 
         self.pool = pool
         self.mlp_head = nn.Sequential(
-            nn.Linear(dim, num_classes)
+            nn.Linear(dim, dim//2),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.LayerNorm(dim//2),
+            nn.Linear(dim//2, num_classes)
         )
+
+        # self.mlp_head = nn.Sequential(
+        #     nn.Linear(dim, num_classes)
+        # )
 
     def forward(self, x, lens):
         # remove unnecessary padding

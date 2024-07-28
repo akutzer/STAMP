@@ -9,6 +9,7 @@ import h5py
 import torch
 from torch.utils.data import Dataset
 import pandas as pd
+from pycox.models import LogisticHazard
 
 
 __all__ = ['BagDataset', 'make_dataset', 'get_cohort_df']
@@ -148,7 +149,7 @@ class EncodedDataset(MapDataset):
 
     def _unsqueeze_to_float32(self, x):
         return torch.tensor(
-            self.encode.transform(np.array(x).reshape(1, -1)),
+            np.array(self.encode.transform(np.array(x))),
             dtype=torch.float32)
 
 @dataclass
@@ -190,11 +191,37 @@ class BagDataset(Dataset):
 
 
 class DummyLabelTransform():
-    def __init__(self, categories:int = 1):
-        self.categories_ = [[f"cat{i}" for i in range(1, categories + 1)]]
+    def __init__(self, categories: int = 1):
+        self.categories_ = [f"cat{i}" for i in range(1, categories + 1)]
     
     def transform(self, labels):
         return labels
+
+
+class DiscreteTimeTransform():
+    def __init__(self, num_bins: int = 1, scheme='quantiles'): # ' equidistant'
+        self.transform_ = LogisticHazard.label_transform(num_bins, scheme=scheme)
+    
+    def fit_transform(self, labels):
+        durations, events = labels[..., 0], labels[..., 1]
+        fit = self.transform_.fit_transform(durations, events)
+        return fit
+    
+    def transform(self, labels):
+        durations, events = labels[..., 0:1], labels[..., 1:2]
+        if reduce := (durations.ndim == 1):
+            durations = durations[None]
+            events = events[None]            
+        out = self.transform_.transform(durations, events)
+        out = np.stack(out, axis=-1)
+        if reduce:
+            out = out[:, 0]
+        # print(out)
+        return out
+    
+    @property
+    def categories_(self):  return self.transform_.cuts
+
 
 
 def _to_fixed_size_bag(bag: torch.Tensor, bag_size: int = 512) -> Tuple[torch.Tensor, int]:
