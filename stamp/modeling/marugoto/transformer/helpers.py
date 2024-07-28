@@ -28,9 +28,9 @@ class IncompatibleVersionError(Exception):
     pass
 
 
-def safe_load_learner(model_path):
+def safe_load_learner(model_path, use_cpu):    
     try:
-        learn = load_learner(model_path)
+        learn = load_learner(model_path, cpu=use_cpu) # if False will use GPU instead
         return learn
     except ModuleNotFoundError as e:
         if e.name == "stamp.modeling.marugoto.transformer.ViT":
@@ -187,6 +187,13 @@ def deploy_categorical_model_(
         model_path:  Path of the model to deploy.
         output_path:  File to save model in.
     """
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    if device.type == "cuda":
+        # allow for usage of TensorFloat32 as internal dtype for matmul on modern NVIDIA GPUs
+        torch.set_float32_matmul_precision("high")
+    
+    use_cpu = (device.type == "cpu")
+    
     feature_dir = Path(feature_dir)
     model_path = Path(model_path)
     output_path = Path(output_path)
@@ -195,7 +202,7 @@ def deploy_categorical_model_(
         return
 
 
-    learn = safe_load_learner(model_path)
+    learn = safe_load_learner(model_path, use_cpu=use_cpu)
     target_enc = get_target_enc(learn)
     categories = target_enc.categories_[0]
 
@@ -205,7 +212,7 @@ def deploy_categorical_model_(
 
     test_df = get_cohort_df(clini_table, slide_table, feature_dir, target_label, categories)
 
-    patient_preds_df = deploy(test_df=test_df, learn=learn, target_label=target_label)
+    patient_preds_df = deploy(test_df=test_df, learn=learn, target_label=target_label, device=device)
     output_path.mkdir(parents=True, exist_ok=True)
     patient_preds_df.to_csv(preds_csv, index=False)
 
@@ -237,6 +244,11 @@ def categorical_crossval_(
     feature_dir = Path(feature_dir)
     output_path = Path(output_path)
     output_path.mkdir(exist_ok=True, parents=True)
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    if device.type == "cuda":
+        # allow for usage of TensorFloat32 as internal dtype for matmul on modern NVIDIA GPUs
+        torch.set_float32_matmul_precision("high")
 
     # just a big fat object to dump all kinds of info into for later reference
     # not used during actual training
@@ -305,7 +317,8 @@ def categorical_crossval_(
         fold_test_df.drop(columns='slide_path').to_csv(fold_path/'test.csv', index=False)
         patient_preds_df = deploy(
             test_df=fold_test_df, learn=learn,
-            target_label=target_label, cat_labels=cat_labels, cont_labels=cont_labels)
+            target_label=target_label, cat_labels=cat_labels, 
+            cont_labels=cont_labels, device=device)
         patient_preds_df.to_csv(preds_csv, index=False)
 
 

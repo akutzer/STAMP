@@ -203,6 +203,7 @@ def deploy(
     test_df: pd.DataFrame, learn: Learner, *,
     target_label: Optional[str] = None,
     cat_labels: Optional[Sequence[str]] = None, cont_labels: Optional[Sequence[str]] = None,
+    device: torch.device = torch.device('cpu')
 ) -> pd.DataFrame:
     assert test_df.PATIENT.nunique() == len(test_df), 'duplicate patients!'
 
@@ -227,7 +228,11 @@ def deploy(
         add_features=add_features,
         bag_size=None)
 
-    test_dl = DataLoader(test_ds, batch_size=1, shuffle=False, num_workers=8)
+    test_dl = DataLoader(
+        test_ds, batch_size=1, shuffle=False, num_workers=8,
+        device=device, pin_memory=device.type == "cuda")
+
+    #removed softmax in forward, but add here to get 0-1 probabilities
     patient_preds, patient_targs = learn.get_preds(dl=test_dl, act=lambda x: x)
 
     # make into DF w/ ground truth
