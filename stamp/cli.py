@@ -198,7 +198,7 @@ def run_cli(args: argparse.Namespace):
         case "crossval":
             require_configs(
                 cfg,
-                ["clini_table", "slide_table", "output_dir", "feature_dir", "target_label", "cat_labels", "cont_labels", "n_splits", "method", "num_bins", "aggregation"], # this one requires the n_splits key!
+                ["clini_table", "slide_table", "output_dir", "feature_dir", "target_label", "cat_labels", "cont_labels", "n_splits", "method", "num_bins", "aggregation", "extra_data"], # this one requires the n_splits key!
                 prefix="modeling",
                 paths_to_check=["clini_table", "slide_table", "feature_dir"]
             )
@@ -215,7 +215,8 @@ def run_cli(args: argparse.Namespace):
                                   n_splits=c.n_splits,
                                   method=c.method,
                                   num_bins=c.num_bins,
-                                  aggregation=c.aggregation.lower())
+                                  aggregation=c.aggregation.lower(),
+                                  extra_data=c.extra_data)
         case "deploy":
             require_configs(
                 cfg,

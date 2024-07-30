@@ -54,7 +54,8 @@ def train_categorical_model_(
     cont_labels: Sequence[str] = [],
     categories: Optional[Iterable[str]] = None,
     num_bins: Optional[int] = None,
-    aggregation: str = "trans_mil"
+    aggregation: str = "trans_mil",
+    extra_data: bool =False
 ) -> None:
     """Train a categorical model on a cohort's tile's features.
 
@@ -98,6 +99,7 @@ def train_categorical_model_(
     train_patients, valid_patients = train_test_split(df.PATIENT, stratify=df[event_label], random_state=5, test_size=.2)
     train_df = df[df.PATIENT.isin(train_patients)]
     valid_df = df[df.PATIENT.isin(valid_patients)]
+    
     train_df.drop(columns='slide_path').to_csv(output_path/'train.csv', index=False)
     valid_df.drop(columns='slide_path').to_csv(output_path/'valid.csv', index=False)
     
@@ -227,7 +229,8 @@ def categorical_crossval_(
     n_splits: int = 5,
     categories: Optional[Iterable[str]] = None,
     num_bins: Optional[int] = None,
-    aggregation: str = "trans_mil"
+    aggregation: str = "trans_mil",
+    extra_data: bool = False
 ) -> None:
     """Performs a cross-validation for a categorical target.
 
@@ -265,6 +268,7 @@ def categorical_crossval_(
         'datetime': datetime.now().astimezone().isoformat()}
 
     df, categories = get_cohort_df(clini_table, slide_table, feature_dir, target_label, categories)
+
     info['categories'] = list(categories)
 
     time_label, event_label = target_label
@@ -280,15 +284,22 @@ def categorical_crossval_(
     if (fold_path := output_path/'folds.pt').exists():
         folds = torch.load(fold_path)
     else:
+        if extra_data:
+            extra_df = df[df['source'] == 'extra']
+            main_df = df[df['source'] != 'extra']
+        else:
+            main_df = df
+        main_df = main_df.reset_index(drop=True)
+        #added shuffling with seed 1337
         skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=1337)
-        patient_df = df.groupby('PATIENT').first().reset_index()
+        patient_df = main_df.groupby('PATIENT').first().reset_index()
         event_label = target_label[1]
         folds = tuple(skf.split(patient_df.PATIENT, patient_df[event_label]))
         torch.save(folds, fold_path)
 
     info['folds'] = [
         {
-            part: list(df.PATIENT[folds[fold][i]])
+            part: list(main_df.PATIENT[folds[fold][i]])
             for i, part in enumerate(['train', 'test'])
         }
         for fold in range(n_splits) ]
@@ -305,15 +316,22 @@ def categorical_crossval_(
         elif (fold_path/'export.pkl').exists():
             learn = safe_load_learner(fold_path/'export.pkl')
         else:
-            fold_train_df = df.iloc[train_idxs]
-            learn = _crossval_train(
-                fold_path=fold_path, fold_df=fold_train_df, fold=fold, info=info,
-                target_label=target_label, target_enc=target_enc,
-                cat_labels=cat_labels, cont_labels=cont_labels, method=method,
-                aggregation=aggregation)
+            fold_train_df = main_df.iloc[train_idxs]
+            if extra_data:
+                learn = _crossval_train(
+                    fold_path=fold_path, fold_df=fold_train_df, fold=fold, info=info,
+                    target_label=target_label, target_enc=target_enc,
+                    cat_labels=cat_labels, cont_labels=cont_labels, method=method,
+                    aggregation=aggregation, extra_data=extra_data, extra_df=extra_df)
+            else:
+                learn = _crossval_train(
+                    fold_path=fold_path, fold_df=fold_train_df, fold=fold, info=info,
+                    target_label=target_label, target_enc=target_enc,
+                    cat_labels=cat_labels, cont_labels=cont_labels, method=method,
+                    aggregation=aggregation, extra_data=extra_data)
             learn.export()
 
-        fold_test_df = df.iloc[test_idxs]
+        fold_test_df = main_df.iloc[test_idxs]
         fold_test_df.drop(columns='slide_path').to_csv(fold_path/'test.csv', index=False)
         patient_preds_df = deploy(
             test_df=fold_test_df, learn=learn,
@@ -323,7 +341,7 @@ def categorical_crossval_(
 
 
 def _crossval_train(
-    *, fold_path, fold_df, fold, info, target_label, target_enc, cat_labels, cont_labels, method, aggregation
+    *, fold_path, fold_df, fold, info, target_label, target_enc, cat_labels, cont_labels, method, aggregation, extra_data, extra_df=None
 ):
     """Helper function for training the folds."""
     assert fold_df.PATIENT.nunique() == len(fold_df)
@@ -335,6 +353,9 @@ def _crossval_train(
     )
     train_df = fold_df[fold_df.PATIENT.isin(train_patients)]
     valid_df = fold_df[fold_df.PATIENT.isin(valid_patients)]
+    # If extra data is to be included, it should be added here before any further processing
+    if extra_data:
+        train_df = pd.concat([train_df, extra_df]).reset_index(drop=True)
     train_df.drop(columns='slide_path').to_csv(fold_path/'train.csv', index=False)
     valid_df.drop(columns='slide_path').to_csv(fold_path/'valid.csv', index=False)
 

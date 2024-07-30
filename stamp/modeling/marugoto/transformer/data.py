@@ -361,6 +361,7 @@ def get_cohort_df(
     # remove uninteresting
     # df = df[df[target_label].isin(categories)]
     # remove slides we don't have
+    #feature_dir = Path(feature_dir)
     h5s = set(feature_dir.glob('*.h5'))
     assert h5s, f'no features found in {feature_dir}!'
     h5_df = pd.DataFrame(h5s, columns=['slide_path'])
@@ -377,3 +378,13 @@ def get_cohort_df(
     df[event_label] = df[event_label].astype(int)
 
     return df, []
+
+
+if __name__ == '__main__':
+    clini_table = '/mnt/bulk-io/lizhang/LiWorkSpace/leopard/data/tcga_leopard_clini_stamp.csv'
+    slide_table = '/mnt/bulk-io/lizhang/LiWorkSpace/leopard/data/tcga_leopard_clini_stamp.csv'
+    feature_dir = '/mnt/bulk-io/maurice/LEOPARD_CHALLENGE/data/tcga_leopard_ctp_norm'
+    target_label = ['follow_up_years', 'event']
+    categories = []
+    df, categories = get_cohort_df(clini_table, slide_table, feature_dir, target_label, categories)
+    print('df:', df)

@@ -13,7 +13,7 @@ from fastai.vision.all import (
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from sksurv.metrics import concordance_index_censored
+#from sksurv.metrics import concordance_index_censored
 
 
 from .data import make_dataset, SKLearnEncoder
@@ -65,7 +65,7 @@ def train(
     n_epoch: int = 100,
     patience: int = 10,
     path: Optional[Path] = None,
-    batch_size: int = 100,
+    batch_size: int = 2,
     cores: int = 8,
     plot: bool = True,
     method: str = "cox",
@@ -91,7 +91,7 @@ def train(
         add_features=[
             (enc, vals[~valid_idxs])
             for enc, vals in add_features],
-        bag_size=1024)
+        bag_size=512)
 
     valid_ds = make_dataset(
         bags=bags[valid_idxs],
