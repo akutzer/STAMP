@@ -6,24 +6,24 @@
 # Only use absolute paths!
 
 preprocessing:
-  output_dir: # Path to save features to
-  wsi_dir: # Path of where the whole-slide images are.
-  cache_dir: # Directory to store intermediate slide JPGs
+  output_dir: /mnt/bulk-io/maurice/LEOPARD_CHALLENGE/data/outputs_ctp_norm/features # Path to save features to
+  wsi_dir: /mnt/bulk-io/maurice/LEOPARD_CHALLENGE/data/wsi # Path of where the whole-slide images are.
+  cache_dir: /mnt/bulk-io/maurice/LEOPARD_CHALLENGE/data/outputs_ctp_norm/cache_dir # Directory to store intermediate slide JPGs
   microns: 256 # Edge length in microns for each patch (default is 256, with pixel size 224, 256/224 = ~1.14MPP = ~9x magnification)
-  norm: false # Perform Macenko normalisation
+  norm: true # Perform Macenko normalisation
   feat_extractor: ctp # Use ctp for CTransPath (default) or uni for UNI (requires prior authentication)
   del_slide: false # Remove the original slide after processing
   cache: true # Save intermediate images (slide, background rejected, normalized)
   only_feature_extraction: false # Only perform feature extraction (intermediate images (background rejected, [normalized]) have to exist)
-  cores: 8 # CPU cores to use
-  device: cuda:0 # device to run feature extraction on (cpu, cuda, cuda:0, etc.)
+  cores: 16 # CPU cores to use
+  device: cuda # device to run feature extraction on (cpu, cuda, cuda:0, etc.)
 
 modeling:
-  clini_table: # Path to clini_table file (.xlsx or .csv)
-  slide_table: # Path to slide_table file (.xlsx or .csv)
-  feature_dir: ${preprocessing.output_dir}/STAMP_macenko_xiyuewang-ctranspath-7c998680 # Path to feature directory
-  output_dir: # Path to output directory
-  target_label: # Target label. No spaces allowed! Format clinical table accordingly
+  clini_table: /mnt/bulk-io/lizhang/LiWorkSpace/leopard/data/tcga_leopard_clini_stamp.csv # Path to clini_table file (.xlsx or .csv)
+  slide_table: /mnt/bulk-io/lizhang/LiWorkSpace/leopard/data/tcga_leopard_clini_stamp.csv # Path to slide_table file (.xlsx or .csv)
+  feature_dir: /mnt/bulk-io/maurice/LEOPARD_CHALLENGE/data/tcga_leopard_ctp_norm # Path to feature directory
+  output_dir: /mnt/bulk-io/lizhang/LiWorkSpace/leopard/experiemnts/crossval_tcga_leopard/bs16_bags512_cox_transform # Path to output directory
+  target_label: ['follow_up_years', 'event'] # Target label. No spaces allowed! Format clinical table accordingly
   categories: [] # Categories (list), leave empty to automatically infer based on unique values in the target_label column
   cat_labels: [] # Extra input category labels (list, can be empty)
   cont_labels: [] # Extra input continuous labels (list, can be empty)
@@ -33,13 +33,17 @@ modeling:
   method: cox # "cox" or "logistic-hazard" 
   num_bins: 10  # number of intervals for logistic-hazard loss
   aggregation: trans_mil # selects the aggregation mechanism: trans_mil, attn_mil
+  extra_data: True
   
   statistics:
     pred_csvs: # Paths to prediction CSVs to plot ROC curves for
-      - path/to/patient-preds.csv # only need 1 path when fully training (remove second one)
-      - another/path/to/patient-preds.csv # for cross-validation, you will have fold-0, fold-1, fold-k, add below
+      - /stamp/data/fold-0/patient-preds.csv # only need 1 path when fully training (remove second one)
+      - /stamp/data/fold-1/patient-preds.csv # for cross-validation, you will have fold-0, fold-1, fold-k, add below
+      - /stamp/data/fold-2/patient-preds.csv
+      - /stamp/data/fold-3/patient-preds.csv
+      - /stamp/data/fold-4/patient-preds.csv
     method: ${modeling.method}
-    output_dir: /path/to/store/model_statistics # Path to save ROC curve and statistics to
+    output_dir: /stamp/data # Path to save ROC curve and statistics to
   
 heatmaps:
   slide_name: # Name of the slide to create heatmaps for, wildcards allowed, no file extensions
