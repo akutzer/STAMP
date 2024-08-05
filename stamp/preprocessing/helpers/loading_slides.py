@@ -79,7 +79,7 @@ def extract_mpp_from_metadata(slide: openslide.OpenSlide) -> float:
 def extract_mpp_from_comments(slide: openslide.OpenSlide) -> float:
     slide_properties = slide.properties.get('openslide.comment')
     pattern = r'<PixelSizeMicrons>(.*?)</PixelSizeMicrons>'
-    match = re.search(pattern, slide_properties)
+    match = re.search(pattern, slide_properties if slide_properties is not None else "")
     if match:
         return match.group(1)
     else:

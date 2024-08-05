@@ -16,7 +16,7 @@ import matplotlib.pyplot as plt
 from sksurv.metrics import concordance_index_censored
 
 
-from .data import make_dataset, SKLearnEncoder
+from .data import make_dataset, SKLearnEncoder, BagDataset, MapDataset, EncodedDataset, zip_bag_targ
 from .TransMIL import TransMIL
 from .AttnMIL import AttnMIL
 
@@ -255,4 +255,71 @@ def deploy(
         patient_preds_df["integrated_survival"] = calc_isurv(patient_preds, intervals)
         
     patient_preds_df = patient_preds_df.sort_values(by='PATIENT')
+    return patient_preds_df
+
+
+def real_deploy(
+    test_df: pd.DataFrame, learn: Learner, *,
+    target_label: Optional[str] = None,
+    cat_labels: Optional[Sequence[str]] = None, cont_labels: Optional[Sequence[str]] = None,
+    device: torch.device = torch.device('cpu')
+) -> pd.DataFrame:
+    # assert test_df.PATIENT.nunique() == len(test_df), 'duplicate patients!'
+
+    if target_label is None: target_label = learn.target_label
+    if cat_labels is None: cat_labels = learn.cat_labels
+    if cont_labels is None: cont_labels = learn.cont_labels
+
+    if not hasattr(learn, "method"):
+       method = "cox"
+       print("WARNING: Method missing. Using `cox`!")
+    else:
+        method = learn.method
+    target_enc = learn.dls.dataset._datasets[-1].encode
+    categories = target_enc.categories_
+    add_features = []
+    if cat_labels:
+        cat_enc = learn.dls.dataset._datasets[-2]._datasets[0].encode
+        add_features.append((cat_enc, test_df[cat_labels].values))
+    if cont_labels:
+        cont_enc = learn.dls.dataset._datasets[-2]._datasets[1].encode
+        add_features.append((cont_enc, test_df[cont_labels].values))
+    
+
+    dummy_targs = np.concatenate([
+        np.random.rand(test_df.slide_path.values.shape[0], 1),
+        np.random.randint(2, size=(test_df.slide_path.values.shape[0], 1))
+        ], axis=-1
+    )
+
+    test_ds = MapDataset(
+        zip_bag_targ,
+        BagDataset(test_df.slide_path.values, bag_size=None),
+        EncodedDataset(target_enc, dummy_targs),
+    )
+
+    test_dl = DataLoader(
+        test_ds, batch_size=1, shuffle=False, num_workers=8,
+        device=device, pin_memory=device.type == "cuda")
+    
+    patient_preds, patient_targs = learn.get_preds(dl=test_dl, act=lambda x: x, with_targs=False, with_loss=False)
+    
+    # make into DF w/ ground truth
+    patient_preds_df = pd.DataFrame.from_dict({
+        'FILENAME': test_df.FILENAME.values,
+    })
+
+    if method == "cox":
+        patient_preds_df["relative_log_risk"] = patient_preds.flatten()
+        patient_preds_df["relative_risk"] = np.exp(patient_preds).flatten()
+    elif method == "logistic-hazard":
+        intervals = target_enc.categories_
+        hazard = torch.sigmoid(patient_preds).cpu()
+        assert patient_preds.shape[-1] == len(intervals)
+        for i, t in enumerate(intervals):
+            patient_preds_df[f"{t}"] = hazard[:, i]
+        patient_preds_df["mean_residual_lifetime"] = calc_mrl(patient_preds, intervals)
+        patient_preds_df["integrated_survival"] = calc_isurv(patient_preds, intervals)
+        
+    patient_preds_df = patient_preds_df.sort_values(by='FILENAME')
     return patient_preds_df

@@ -219,19 +219,19 @@ def run_cli(args: argparse.Namespace):
         case "deploy":
             require_configs(
                 cfg,
-                ["clini_table", "slide_table", "output_dir", "deploy_feature_dir", "target_label", "cat_labels", "cont_labels", "model_path"], # this one requires the model_path key!
+                ["output_dir", "deploy_feature_dir", "model_path"], # this one requires the model_path key!
                 prefix="modeling",
-                paths_to_check=["clini_table", "slide_table", "deploy_feature_dir"]
+                paths_to_check=["deploy_feature_dir"]
             )
             c = cfg.modeling
             from .modeling.marugoto.transformer.helpers import deploy_categorical_model_
-            deploy_categorical_model_(clini_table=Path(c.clini_table),
-                                      slide_table=Path(c.slide_table),
+            deploy_categorical_model_(clini_table=Path(c.clini_table) if 'clini_table' in c and isinstance(c.clini_table, str) else None,
+                                      slide_table=Path(c.slide_table) if 'slide_table' in c and isinstance(c.slide_table, str) else None,
                                       feature_dir=Path(c.deploy_feature_dir),
                                       output_path=Path(c.output_dir),
-                                      target_label=c.target_label,
-                                      cat_labels=c.cat_labels,
-                                      cont_labels=c.cont_labels,
+                                      target_label=c.target_label if 'target_label' in c else None,
+                                      cat_labels=c.cat_labels if 'cat_labels' in c else None,
+                                      cont_labels=c.cont_labels if 'cont_labels' in c else None,
                                       model_path=Path(c.model_path))
             print("Successfully deployed models")
         case "statistics":

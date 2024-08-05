@@ -147,19 +147,23 @@ def extract_features_(
 
     ds = ConcatDataset([unaugmented_ds, augmented_ds])
     dl = torch.utils.data.DataLoader(
-        ds, batch_size=64, shuffle=False, num_workers=cores, drop_last=False, pin_memory=device != 'cpu')
+        ds, batch_size=64, shuffle=False, num_workers=cores, drop_last=False, pin_memory=device != 'cpu'
+    )
 
     model = model.eval().to(device)
     dtype = next(model.parameters()).dtype
 
     feats = []
-    for batch in tqdm(dl, leave=False):
-        feats.append(
-            model(batch.type(dtype).to(device)).half().cpu().detach())
+    with torch.inference_mode():
+        for patches_batch in tqdm(dl, leave=False):
+            patches_batch = patches_batch.to(dtype=dtype, device=device)
+            features_batch = model(patches_batch).half().cpu()
+            feats.append(features_batch)
+    feats = torch.concat(feats, dim=0).numpy()
 
     with h5py.File(f'{outdir}.h5', 'w') as f:
         f['coords'] = coords
-        f['feats'] = torch.concat(feats).cpu().numpy()
+        f['feats'] = feats
         f['augmented'] = np.repeat(
             [False, True], [len(unaugmented_ds), len(augmented_ds)])
         assert len(f['feats']) == len(f['augmented'])

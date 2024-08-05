@@ -13,7 +13,7 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from fastai.vision.learner import load_learner
 import torch
 
-from .base import train, deploy
+from .base import train, deploy, real_deploy
 from .data import get_cohort_df, get_target_enc, SKLearnEncoder, DummyLabelTransform, DiscreteTimeTransform
 
 __all__ = [
@@ -201,7 +201,6 @@ def deploy_categorical_model_(
         print(f'{preds_csv} already exists!  Skipping...')
         return
 
-
     learn = safe_load_learner(model_path, use_cpu=use_cpu)
     target_enc = get_target_enc(learn)
     categories = target_enc.categories_[0]
@@ -210,11 +209,26 @@ def deploy_categorical_model_(
     cat_labels = cat_labels or learn.cat_labels
     cont_labels = cont_labels or learn.cont_labels
 
-    test_df = get_cohort_df(clini_table, slide_table, feature_dir, target_label, categories)
+    if clini_table is None and slide_table is None:
+        h5s = set(feature_dir.glob('*.h5'))
+        assert h5s, f'no features found in {feature_dir}!'
+        test_df = pd.DataFrame(h5s, columns=['slide_path'])
+        test_df['FILENAME'] = test_df.slide_path.map(lambda p: p.stem)
+        test_df['slide_path'] = test_df.slide_path.map(lambda p: [p])
+    else:
+        test_df = get_cohort_df(clini_table, slide_table, feature_dir, target_label, categories)
 
-    patient_preds_df = deploy(test_df=test_df, learn=learn, target_label=target_label, device=device)
+    patient_preds_df = real_deploy(test_df=test_df, learn=learn, target_label=target_label, device=device)
     output_path.mkdir(parents=True, exist_ok=True)
     patient_preds_df.to_csv(preds_csv, index=False)
+
+    with open(output_path / "overall-survival-years.json", 'w') as f:
+        risks = -patient_preds_df["relative_risk"].values
+        if risks.size > 1:
+            f.write(json.dumps(risks.tolist(), indent=4))
+        else:
+            f.write(json.dumps(risks.item(), indent=4))
+
 
 
 def categorical_crossval_(
