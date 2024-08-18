@@ -119,7 +119,7 @@ class JPEGRegionLoader:
         
         self.current_region += 1
         
-        return region_array, (h, w)
+        return region_array, position[::-1]
 
     def __len__(self) -> int:
         return self.length
