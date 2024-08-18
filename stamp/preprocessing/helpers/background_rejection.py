@@ -25,9 +25,7 @@ def canny_filter(patch: np.array) -> bool:
     return edge >= 2
 
 
-def filter_background(
-    patches: np.array, patches_coords: np.array, cores: int = 8
-) -> Tuple[np.ndarray, np.ndarray]:
+def filter_background(patches: np.array, patches_coords: np.array) -> Tuple[np.ndarray, np.ndarray]:
     """Returns the patches which do not only contain background."""
     n = len(patches)
     has_tissue = np.zeros((n,), dtype=np.bool_)

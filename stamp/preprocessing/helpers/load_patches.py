@@ -1,6 +1,11 @@
 import numpy as np
-from PIL import Image, ImageDraw
-from typing import Tuple
+from PIL import Image
+from typing import Tuple, Optional, Union
+from tempfile import mkdtemp
+from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
+
+
 
 
 def extract_patches(
@@ -79,19 +84,96 @@ def view_as_tiles(region, tile_size, position):
     return tiles, tile_positions
 
 
-def reconstruct_from_patches(
-    patches: np.ndarray, patches_coords: np.array, img_shape: Tuple[int, int]
-) -> np.ndarray:
-    """
-    Reconstruct the WSI from the patches.
-    `patches` is of shape (num_patches, patch_height, patch_width, channels)
-    """
-    img_h, img_w = img_shape
-    patch_h, patch_w = patches.shape[1:3]
-    img = Image.new("RGB", (img_w, img_h))
-    for (x, y), patch in zip(patches_coords, patches):  # (x, y) = (height, width)
-        img.paste(
-            Image.fromarray(patch[:patch_h, :patch_w]),
-            (y, x, y + patch_w, x + patch_h)
-        )
-    return img
+# def reconstruct_from_patches(
+#     patches: np.ndarray, patches_coords: np.array, img_shape: Tuple[int, int]
+# ) -> np.ndarray:
+#     """
+#     Reconstruct the WSI from the patches.
+#     `patches` is of shape (num_patches, patch_height, patch_width, channels)
+#     """
+#     img_h, img_w = img_shape
+#     patch_h, patch_w = patches.shape[1:3]
+#     img = Image.new("RGB", (img_w, img_h))
+#     for (x, y), patch in zip(patches_coords, patches):  # (x, y) = (height, width)
+#         img.paste(
+#             Image.fromarray(patch[:patch_h, :patch_w]),
+#             (y, x, y + patch_w, x + patch_h)
+#         )
+#     return img
+
+
+
+class AsyncMemmapImage:
+    def __init__(self, shape: Tuple[int, ...], dtype: str = 'uint8', mode: str = 'w+', max_workers: Optional[int] = None):
+        self._filename = Path(mkdtemp()) / 'memmap.dat'
+        self.shape = shape
+        self.dtype = dtype
+        self.mode = mode
+        self.fp = np.memmap(self._filename, dtype=dtype, mode=mode, shape=shape)
+        self.executor = ThreadPoolExecutor(max_workers=max_workers)
+
+    def write_region(self, data: np.ndarray, position: Tuple[int, int]) -> None:
+        """
+        Asynchronously writes a chunk of data to the memmap.
+
+        Parameters:
+            data (np.ndarray): The data to be written.
+            position (Tuple[int, int]): The top-left (h, w) position where the data will be written.
+        """
+        def write_chunk(fp: np.memmap, data: np.ndarray, position: Tuple[int, int]):
+            h_start, w_start = position
+            h_end = min(h_start + data.shape[0], self.shape[0])
+            w_end = min(w_start + data.shape[1], self.shape[1])
+
+            # slice data if it exceeds the memmap boundaries
+            fp[h_start:h_end, w_start:w_end] = data[:h_end - h_start, :w_end - w_start]
+            fp.flush()
+        
+        self.executor.submit(write_chunk, self.fp, data, position)
+    
+    def write_tiles(self, tiles: np.ndarray, positions: np.ndarray) -> None:
+        """
+        Asynchronously writes multiple tiles of data to the memmap.
+
+        Parameters:
+            tiles (np.ndarray): A 3D or 4D array where each element is a 3D or 2D tile to be written.
+            positions (np.ndarray): A 2D array where each element is a (row, column) position for the corresponding tile.
+        """
+        def write_chunk(fp: np.memmap, tiles: np.ndarray, positions: np.ndarray):
+            for tile, position in zip(tiles, positions):
+                h_start, w_start = position
+                h_end = min(h_start + tile.shape[0], self.shape[0])
+                w_end = min(w_start + tile.shape[1], self.shape[1])
+
+                # slice data if it exceeds the memmap boundaries
+                fp[h_start:h_end, w_start:w_end] = tile[:h_end - h_start, :w_end - w_start]
+            fp.flush()
+        
+        self.executor.submit(write_chunk, self.fp, tiles, positions)
+
+    def save(self, output_path: Union[Path, str]) -> None:
+        """
+        Saves the entire memmap data as an image file.
+
+        Parameters:
+            output_path (Union[Path, str]): The path where the image file will be saved.
+        """
+        # ensure all threads are completed before saving the image
+        self.executor.shutdown(wait=True)
+
+        if len(self.shape) == 3 and self.shape[2] == 3:  # RGB data
+            image_data = self.fp.astype('uint8')
+        elif len(self.shape) == 2 or (len(self.shape) == 3 and self.shape[2] == 1):  # Grayscale data
+            image_data = self.fp.squeeze().astype('uint8')
+        else:
+            raise ValueError("Unsupported shape for image conversion. Must be 2D or 3D with 1 or 3 channels.")
+        
+        image = Image.fromarray(image_data)
+        image.save(output_path)
+
+    def close(self) -> None:
+        """
+        Shuts down the thread pool executor and closes the memmap file.
+        """
+        self.executor.shutdown(wait=True)
+        del self.fp

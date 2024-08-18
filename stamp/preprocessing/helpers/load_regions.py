@@ -1,19 +1,19 @@
 import re
 from typing import Tuple
-from concurrent import futures
 import concurrent
 import openslide
-from tqdm import tqdm
 import numpy as np
 from PIL import Image
-import threading
-import queue
 import math
+from PIL import Image
+from typing import Union, Tuple
+from pathlib import Path
+import numpy as np
 
 from .exceptions import MPPExtractionError
 
-Image.MAX_IMAGE_PIXELS = None
 
+Image.MAX_IMAGE_PIXELS = None
 
 
 class AsyncRegionLoader:
@@ -29,6 +29,8 @@ class AsyncRegionLoader:
         self.height = math.ceil(self.slide_mpp * slide.dimensions[1] / self.target_mpp)
         self.width = math.ceil(self.slide_mpp * slide.dimensions[0] / self.target_mpp)
 
+        # calculate tile and region size for the source MPP
+        # these tiles will then get resized to the desired size and MPP value
         self._tile_size = math.ceil(self.target_microns / self.slide_mpp)
         self._region_size = self.tiles_per_region * self._tile_size
         self._target_region_size = self.tiles_per_region * self.target_tile_size
@@ -48,10 +50,10 @@ class AsyncRegionLoader:
                 self.future_to_pos[self.executor.submit(self.load_region, self.slide, position, size, target_size)] = transform_position[::-1]
         return self
 
-    def __len__(self):
+    def __len__(self) -> int:
         return self.length
         
-    def __next__(self):
+    def __next__(self) -> Tuple[np.ndarray, Tuple[int, int]]:
         if not self.future_to_pos:
             self.executor.shutdown(wait=True)
             raise StopIteration
@@ -68,18 +70,60 @@ class AsyncRegionLoader:
     
     @staticmethod
     def load_region(slide, position, size, target_size):
-        """Load regions."""
         region = slide.read_region(position, 0, size).convert('RGB')
         # if the region goes outside the slide then openslide fills these values with 0
-        # if position[0] + size[0] > slide.dimensions[0] or position[1] + size[1] > slide.dimensions[1]:
-        #     print(region.size, position, slide.dimensions)
-        #     region = region.resize(target_size)
-        #     region.show()
-        # else:
         region = region.resize(target_size)
         
         region = np.array(region)
         return region
+
+
+class JPEGRegionLoader:
+    def __init__(self, path: Union[Path, str], tile_size: int = 224, tiles_per_region: int = 8):
+        """
+        Initializes the JPEGRegionLoader. Stores the entire JPEG in memory!
+
+        Parameters:
+            path (Union[Path, str]): Path to the JPEG image file.
+            tile_size (int): The size of each tile (default is 224).
+            tiles_per_region (int): Number of tiles per region (default is 8).
+        """
+        self.img = Image.open(path)
+        self.tile_size = tile_size
+        self.tiles_per_region = tiles_per_region
+        
+        self.height = self.img.height
+        self.width = self.img.width
+
+        self.region_size = self.tiles_per_region * self.tile_size        
+        self._regions = np.ceil(np.array([self.width, self.height]) / self.region_size).astype(int)
+        self.length = self._regions[0] * self._regions[1]
+
+        self.current_region = 0
+
+    def __iter__(self):
+        return self
+
+    def __next__(self) -> Tuple[np.ndarray, Tuple[int, int]]:
+        if self.current_region >= self.length:
+            raise StopIteration
+        
+        h = self.current_region // self._regions[0]
+        w = self.current_region % self._regions[0]
+        
+        position = (w * self.region_size, h * self.region_size)
+        size = (self.region_size, self.region_size)
+        
+        region = self.img.crop((position[0], position[1], position[0] + size[0], position[1] + size[1]))
+        region_array = np.array(region)
+        
+        self.current_region += 1
+        
+        return region_array, (h, w)
+
+    def __len__(self) -> int:
+        return self.length
+
 
 
 def get_slide_mpp(slide: openslide.OpenSlide) -> float:
