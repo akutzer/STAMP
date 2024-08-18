@@ -238,7 +238,13 @@ def preprocess(output_dir: Path, wsi_dir: Path, model_path: Path, cache_dir: Pat
                 embeddings = np.concatenate(embeddings, axis=0)
                 coords = np.concatenate(coords, axis=0)
                 if embeddings.shape[0] > 0:
-                    # TODO: order embeddings?
+                    # order embeddings row and then column wise
+                    max_width = coords[:, 1].max()
+                    idx = coords[:, 0] * max_width + coords[:, 1]
+                    sort_indices = np.argsort(idx)
+                    embeddings = embeddings[sort_indices]
+                    coords = coords[sort_indices]
+
                     store_features(feat_out_dir, embeddings, coords, extractor.name)
                     num_processed += 1
                 else:
