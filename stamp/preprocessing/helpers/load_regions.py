@@ -47,6 +47,9 @@ class AsyncRegionLoader:
                 transform_position = (w * self._target_region_size, h * self._target_region_size)
                 self.future_to_pos[self.executor.submit(self.load_region, self.slide, position, size, target_size)] = transform_position[::-1]
         return self
+
+    def __len__(self):
+        return self.length
         
     def __next__(self):
         if not self.future_to_pos:

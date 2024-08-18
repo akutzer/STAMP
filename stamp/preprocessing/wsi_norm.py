@@ -24,10 +24,9 @@ from .normalizer.normalizer import MacenkoNormalizer
 from .extractor.feature_extractors import FeatureExtractor, store_features, store_metadata
 from .helpers.common import supported_extensions
 from .helpers.exceptions import MPPExtractionError
-from .helpers.load_slides import load_slide
 from .helpers.load_regions import  AsyncRegionLoader
-from .helpers.load_patches import extract_patches, reconstruct_from_patches, view_as_tiles
-from .helpers.background_rejection import filter_background, filter_background_2
+from .helpers.load_patches import extract_patches, view_as_tiles
+from .helpers.background_rejection import filter_background
 
 
 from memory_profiler import profile
@@ -83,9 +82,9 @@ def preprocess(output_dir: Path, wsi_dir: Path, model_path: Path, cache_dir: Pat
                ):
 
     # Clean up potentially old leftover .lock files
-    # for lockfile in wsi_dir.glob("**/*.lock"):
-    #     if time.time() - os.path.getmtime(lockfile) > 60:
-    #         clean_lockfile(lockfile)
+    for lockfile in wsi_dir.glob("**/*.lock"):
+        if time.time() - os.path.getmtime(lockfile) > 60 * 60:
+            clean_lockfile(lockfile)
     
     target_mpp = target_microns / patch_size
     patch_size = (patch_size, patch_size) # (224, 224) by default
@@ -212,27 +211,18 @@ def preprocess(output_dir: Path, wsi_dir: Path, model_path: Path, cache_dir: Pat
                         logging.error(f"Failed loading slide, continuing... Error: {e}")
                         error_slides.append(slide_name)
                         continue
-
+                    
                     start_loading = time.time()
                     try:
-                        # start = time.time()
-                        # slide_array = load_slide(slide=slide, target_mpp=target_mpp, cores=cores)
-                        # tiles, tile_coords, n_max = extract_patches(slide_array, patch_size, drop_empty=True)
-                        # print(tiles.shape)
-                        # print(time.time() - start)
-
-
-
-                        start = time.time()
-                        region_iter = AsyncRegionLoader(slide, target_microns=target_microns, target_tile_size=patch_size[0], max_workers=cores)
+                        region_loader = AsyncRegionLoader(slide, target_microns=target_microns, target_tile_size=patch_size[0], max_workers=cores)
                         embeddings, coords = [], []
 
                         if cache:
-                            canny_img = Image.new(mode="RGB", size=(region_iter.width, region_iter.height))
+                            canny_img = Image.new(mode="RGB", size=(region_loader.width, region_loader.height))
                             # canny_img = Image.new(mode="L", size=(region_iter.width, region_iter.height))
 
-
-                        for region, position in tqdm(region_iter, total=region_iter.length, leave=False):
+                        total_rejected, total_tiles = 0, 0
+                        for region, position in tqdm(region_loader, leave=False):
                             if region is None: continue
 
                             tiles, tile_coords = view_as_tiles(region, patch_size, position)
@@ -240,8 +230,10 @@ def preprocess(output_dir: Path, wsi_dir: Path, model_path: Path, cache_dir: Pat
                             non_empty = tiles.any(axis=(-3, -2, -1))
                             tiles = tiles[non_empty, ...]
                             tile_coords = tile_coords[non_empty, ...]
+                            total_tiles += tiles.shape[0]
 
-                            tiles, tile_coords, num_rejected = filter_background_2(tiles, tile_coords, cores)
+                            tiles, tile_coords, num_rejected = filter_background(tiles, tile_coords, cores)
+                            total_rejected += num_rejected
                             # logging.info(f"Finished Canny background rejection, rejected {n_tiles-tiles.shape[0]}/{n_tiles} tiles.")
 
                             if cache:
@@ -259,21 +251,6 @@ def preprocess(output_dir: Path, wsi_dir: Path, model_path: Path, cache_dir: Pat
                             if tiles.shape[0] > 0:
                                 embeddings.append(extractor.extract(tiles, cores=0, batch_size=min(tiles.shape[0], 64)))
                                 coords.append(tile_coords)
-                                # features = extractor.extract2(tiles)
-                                # print(features.shape, features.dtype)
-                                # store_features(feat_out_dir, features, patches_coords, extractor.name)
-                                # logging.info(f" Extracted features from slide: {time.time() - start_time:.2f} seconds ({features.shape[0]} tiles)")
-                                # num_processed += 1
-                            # else:
-                            #     logging.warning("No tiles remain for feature extraction after pre-processing. Continuing...")
-                            #     error_slides.append(slide_name)
-                            #     continue
-
-                        # exit(0)
-                        # region_iter, num_regions = load_regions(slide, target_mpp, cores=cores)
-                        # print(num_regions, region_iter)
-                        # for region in tqdm(region_iter, total=num_regions, leave=True):
-                        #     print(region.shape)
                         
                     except MPPExtractionError:
                         if del_slide:
@@ -288,7 +265,7 @@ def preprocess(output_dir: Path, wsi_dir: Path, model_path: Path, cache_dir: Pat
                         logging.error(f"Failed loading slide, continuing... Error: {e}")
                         error_slides.append(slide_name)
                         continue
-                    del slide   # Remove .SVS from memory
+                    # del slide   # Remove .SVS from memory
                 
                     if cache:
                         canny_img.save(slide_cache_dir/"canny_slide.jpg")
@@ -296,73 +273,17 @@ def preprocess(output_dir: Path, wsi_dir: Path, model_path: Path, cache_dir: Pat
                     
                     embeddings = np.concatenate(embeddings, axis=0)
                     coords = np.concatenate(coords, axis=0)
-                    store_features(feat_out_dir, embeddings, coords, extractor.name)
-                    num_processed += 1
+                    if embeddings.shape[0] > 0:
+                        store_features(feat_out_dir, embeddings, coords, extractor.name)
+                        num_processed += 1
+                    else:
+                        logging.warning("No tiles remain for feature extraction after pre-processing. Continuing...")
 
-                    # print(time.time() - start)
-                    # return
-
-                    # print(f" Loaded slide ({time.time() - start_loading:.2f} seconds)")
-                    # logging.info(f"Size of WSI: {slide_array.shape}")
-                        
-                    # if cache:   # Save raw .svs jpg
-                    #     raw_image = Image.fromarray(slide_array)
-                    #     save_image(raw_image, slide_cache_dir/"slide.jpg")
-
-                    # Canny edge detection to discard tiles containing no tissue BEFORE normalization
-                    # patches, patches_coords, _ = extract_patches(slide_array, patch_size, pad=False, drop_empty=True, overlap=False)
-                    # print(f"\nCanny background rejection...")
-                    # patches, patches_coords = filter_background(patches, patches_coords, cores)
-                    # patches.shape = (n_patches, patch_h, patch_w, 3)
-                    # patches_coords.shape = (n_patches, 2)
-
-                #     if cache:
-                #         print("Saving Canny background rejected image...")
-                #         canny_img = reconstruct_from_patches(patches, patches_coords, slide_array.shape[:2])
-                #         save_image(canny_img, slide_cache_dir/"canny_slide.jpg")
-
-                #     # Pass raw slide_array for getting the initial concentrations, tissue_patches for actual normalization
-                #     if norm:
-                #         try: 
-                #             print(f"\nNormalizing slide...")
-                #             start_normalizing = time.time()                        
-                #             patches = normalizer.transform(patches, cores)
-                #             print(f"Normalized slide ({time.time() - start_normalizing:.2f} seconds)")
-                #             if cache:
-                #                 norm_img = reconstruct_from_patches(patches, patches_coords, slide_array.shape[:2])
-                #                 save_image(norm_img, slide_cache_dir/"norm_slide.jpg")
-                #         except np.linalg.LinAlgError as e:
-                #             logging.error(f"Failed normalizing slide, continuing... Error: {e}")
-                #             error_slides.append(slide_name)
-                #             continue
-
-                #     # Remove original slide jpg from memory
-                #     del slide_array
-                    
-                #     # Optionally remove the original slide from harddrive
-                #     if del_slide:
-                #         print("Deleting slide from local folder...")
-                #         if os.path.exists(slide_url):
-                #             os.remove(slide_url)
-
-                # print(f"\nExtracting {extractor.name} features from slide...")
-                # start_time = time.time()
-                # if patches.shape[0] > 0:
-                #     store_metadata(
-                #         outdir=feat_out_dir,
-                #         extractor_name=extractor.name,
-                #         patch_size=patch_size,
-                #         target_microns=target_microns,
-                #         normalized=norm
-                #     )
-                #     features = extractor.extract(patches, cores, batch_size)
-                #     store_features(feat_out_dir, features, patches_coords, extractor.name)
-                #     logging.info(f" Extracted features from slide: {time.time() - start_time:.2f} seconds ({features.shape[0]} tiles)")
-                #     num_processed += 1
-                # else:
-                #     logging.warning("No tiles remain for feature extraction after pre-processing. Continuing...")
-                #     error_slides.append(slide_name)
-                #     continue
+                    logging.info(f"Successfully preprocessed slide ({time.time() - start_loading:.2f} seconds)")
+                    logging.info(f"Reshaped original WSI of shape {slide.dimensions} -> {(region_loader.width, region_loader.height)}")
+                    logging.info(f"Canny background rejection, rejected {total_rejected}/{total_tiles} tiles")
+                    logging.info(f"Embedded {total_tiles - total_rejected} tiles in total")
+        
         else:
             if os.path.exists((f"{feat_out_dir}.h5")):
                 logging.info(".h5 file for this slide already exists. Skipping...")
