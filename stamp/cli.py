@@ -125,6 +125,8 @@ def run_cli(args: argparse.Namespace):
                 model_path = Path(f"{os.environ['STAMP_RESOURCES_DIR']}/ctranspath.pth")
             elif feat_extractor == 'uni':
                 model_path = Path(f"{os.environ['STAMP_RESOURCES_DIR']}/uni/vit_large_patch16_224.dinov2.uni_mass100k/pytorch_model.bin")
+            else:
+                raise ValueError(f"Unknown feature extractor `{feat_extractor}`. Must be either `ctp` or `uni`")
             model_path.parent.mkdir(parents=True, exist_ok=True)
             if model_path.exists():
                 print(f"Skipping download, feature extractor model already exists at {model_path}")
@@ -164,7 +166,7 @@ def run_cli(args: argparse.Namespace):
                 model_path=Path(model_path),
                 cache_dir=Path(c.cache_dir),
                 feat_extractor=c.feat_extractor,
-                # patch_size=c.patch_size,
+                # tile_size=c.patch_size,
                 target_microns=c.microns,
                 cores=c.cores,
                 norm=c.norm,
@@ -172,9 +174,10 @@ def run_cli(args: argparse.Namespace):
                 cache=c.cache if 'cache' in c else True,
                 only_feature_extraction=c.only_feature_extraction,
                 keep_dir_structure=c.keep_dir_structure if 'keep_dir_structure' in c else False,
-                device=c.device,
-                normalization_template=normalization_template_path
-            )
+                normalization_template=normalization_template_path,
+                batch_size = c.batch_size if 'batch_size' in c else 64,
+                device=c.device
+            ) 
         case "train":
             require_configs(
                 cfg,

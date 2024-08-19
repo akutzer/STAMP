@@ -1,10 +1,12 @@
 import os
+import shutil
 from pathlib import Path
 import logging
 from contextlib import contextmanager
 import time
 from datetime import timedelta
 from typing import Optional, List
+import tempfile
 
 import openslide
 from tqdm import tqdm
@@ -63,8 +65,8 @@ def preprocess(
     feature_extractor: str = "ctp", device: str = "cuda", batch_size: int = 64,
     target_microns: int = 256, tile_size: int = 224, cores: int = 4,
     normalize: bool = False, normalization_template: Optional[Path] = None,
-    cache: bool = False, keep_dir_structure: bool = False, use_cache: bool = False,
-    delete_slide: bool = False
+    cache: bool = False, keep_dir_structure: bool = False, only_feature_extraction: bool = False,
+    delete_slide: bool = False, preload_wsi: bool = False
 ) -> None:
     
     # Remove old lock files
@@ -180,18 +182,23 @@ def preprocess(
         if not feature_output_path.with_suffix('.h5').exists() and not slide_path.with_suffix('.lock').exists():
             start_loading_time = time.time()
             with lock_file(slide_path):
-                if (slide_jpg := slide_cache_dir / "canny_slide.jpg").exists() and use_cache:
+                if (slide_jpg := slide_cache_dir / "canny_slide.jpg").exists() and only_feature_extraction:
                     try:
                         chunk_loader = JPEGChunkLoader(slide_jpg, tile_size=tile_size[0])
                     except Exception as e:
                         logging.error(f"Failed loading cached slide, trying to load WSI... Error: {e}")
-                        if use_cache:
+                        if only_feature_extraction:
                             error_slides.append(slide_name)
                             continue
                 
                 else:
                     try:
-                        slide = openslide.OpenSlide(slide_path)
+                        if preload_wsi:
+                            slide_path_tmp = tempfile.NamedTemporaryFile(delete=False)
+                            shutil.copy(slide_path, slide_path_tmp.name)
+                            slide = openslide.OpenSlide(slide_path_tmp.name)
+                        else:
+                            slide = openslide.OpenSlide(slide_path)
                         original_slide_size = slide.dimensions
                         chunk_loader = AsyncChunkLoader(
                             slide, target_microns=target_microns, target_tile_size=tile_size[0], max_workers=max_workers
