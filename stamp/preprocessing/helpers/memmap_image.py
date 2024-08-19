@@ -69,9 +69,7 @@ class AsyncMemmapImage:
             output_path (Union[Path, str]): Path where the image file will be saved.
         """
         # Ensure all threads complete before saving the image
-        print("Waiting for shutdown")
         self.executor.shutdown(wait=True)
-        print("All shutdown")
 
         if len(self.shape) == 3 and self.shape[2] == 3:  # RGB data
             image_data = self.memmap.astype('uint8')

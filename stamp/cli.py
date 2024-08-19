@@ -159,25 +159,25 @@ def run_cli(args: argparse.Namespace):
                 model_path = f"{os.environ['STAMP_RESOURCES_DIR']}/uni/vit_large_patch16_224.dinov2.uni_mass100k/pytorch_model.bin"
             if not Path(model_path).exists():
                 raise ConfigurationError(f"Feature extractor model {model_path} does not exist, please run `stamp setup` to download it.")
-            from .preprocessing.wsi_norm import preprocess
+            from .preprocessing.slide_preprocessing import preprocess
             preprocess(
-                output_dir=Path(c.output_dir),
                 wsi_dir=Path(c.wsi_dir),
+                output_dir=Path(c.output_dir),
                 model_path=Path(model_path),
                 cache_dir=Path(c.cache_dir),
-                feat_extractor=c.feat_extractor,
-                # tile_size=c.patch_size,
-                target_microns=c.microns,
-                cores=c.cores,
-                norm=c.norm,
-                del_slide=c.del_slide,
-                cache=c.cache if 'cache' in c else True,
-                only_feature_extraction=c.only_feature_extraction,
-                keep_dir_structure=c.keep_dir_structure if 'keep_dir_structure' in c else False,
-                normalization_template=normalization_template_path,
+                feature_extractor=c.feat_extractor,
+                device=c.device,
                 batch_size = c.batch_size if 'batch_size' in c else 64,
-                device=c.device
-            ) 
+                target_microns=c.microns,
+                # tile_size=c.patch_size,
+                cores=c.cores,
+                normalize=c.norm,
+                normalization_template=normalization_template_path,
+                cache=c.cache if 'cache' in c else True,
+                keep_dir_structure=c.keep_dir_structure if 'keep_dir_structure' in c else False,
+                delete_slide=c.del_slide,
+                preload_wsi=c.preload_wsi if 'preload_wsi' in c else False
+            )
         case "train":
             require_configs(
                 cfg,

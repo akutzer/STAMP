@@ -151,7 +151,7 @@ class AsyncChunkLoader:
         return self.length
 
     def __next__(self) -> Tuple[Optional[np.ndarray], Tuple[int, int]]:
-        """Return the next chunk and its (y, x) position in the target space."""
+        """Return the next chunk and its (row, column) position in the target space."""
         if not self.future_to_pos:
             self.executor.shutdown(wait=True)
             raise StopIteration
@@ -173,7 +173,7 @@ class AsyncChunkLoader:
 
         Parameters:
             slide (openslide.OpenSlide): The whole slide image object.
-            position (Tuple[int, int]): The (x, y) position of the top-left corner of the chunk.
+            position (Tuple[int, int]): The (column, row) position of the top-left corner of the chunk.
             size (Tuple[int, int]): The size (width, height) of the chunk to load.
             target_size (Tuple[int, int]): The size (width, height) to which the chunk should be resized.
 
@@ -216,7 +216,7 @@ class JPEGChunkLoader:
         return self.length
 
     def __next__(self) -> Tuple[np.ndarray, Tuple[int, int]]:
-        """Return the next chunk and its (x, y) position in the image."""
+        """Return the next chunk and its (row, column) position in the image."""
         if self.current_chunk >= self.length:
             raise StopIteration
         

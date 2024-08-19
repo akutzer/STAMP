@@ -22,8 +22,6 @@ from .helpers.chunk_loaders import AsyncChunkLoader, JPEGChunkLoader, view_as_ti
 from .helpers.memmap_image import AsyncMemmapImage
 from .helpers.background_rejection import filter_background
 
-from memory_profiler import profile
-
 
 Image.MAX_IMAGE_PIXELS = None
 
@@ -59,7 +57,6 @@ def check_write_permissions(directory: Path) -> None:
         remove_lockfile(testfile)
 
 
-@profile
 def preprocess(
     wsi_dir: Path, output_dir: Path, model_path: Path, cache_dir: Path,
     feature_extractor: str = "ctp", device: str = "cuda", batch_size: int = 64,
@@ -223,14 +220,14 @@ def preprocess(
 
                     for chunk, position in tqdm(chunk_loader, leave=False):
                         # `chunk`: 3D numpy array of shape (chunk_height, chunk_width, 3) representing the current chunk of the WSI
-                        # `position`: (y, x) tuple representing tje position of the top-left corner of a chunk
+                        # `position`: (row, column) tuple representing tje position of the top-left corner of a chunk
 
                         if chunk is None:
                             continue
                             
                         # Break the chunk into small tiles and get their coordinates
                         # `tiles`: (num_tiles, tile_height, tile_width, 3)
-                        # `tile_coords`: (num_tiles, 2) where each row represents (y, x) position of the top-left corner of a tile
+                        # `tile_coords`: (num_tiles, 2) where each row represents (row, column) position of the top-left corner of a tile
                         tiles, tile_coords = view_as_tiles(chunk, tile_size, position)
                         
                         # Remove completely black tiles (i.e., tiles where all pixel values are 0 across all channels)
