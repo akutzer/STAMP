@@ -144,7 +144,7 @@ def run_cli(args: argparse.Namespace):
         case "preprocess":
             require_configs(
                 cfg,
-                ["output_dir", "wsi_dir", "cache_dir", "microns", "cores", "norm", "del_slide", "only_feature_extraction", "device", "feat_extractor"],
+                ["output_dir", "wsi_dir", "cache_dir", "microns", "cores", "norm", "del_slide", "device", "feat_extractor"],
                 prefix="preprocessing",
                 paths_to_check=["wsi_dir"]
             )
@@ -163,22 +163,21 @@ def run_cli(args: argparse.Namespace):
             import tracemalloc
             tracemalloc.start()
             preprocess(
-                output_dir=Path(c.output_dir),
                 wsi_dir=Path(c.wsi_dir),
+                output_dir=Path(c.output_dir),
                 model_path=Path(model_path),
                 cache_dir=Path(c.cache_dir),
-                feat_extractor=c.feat_extractor,
-                # patch_size=c.patch_size,
-                target_microns=c.microns,
-                cores=c.cores,
-                norm=c.norm,
-                del_slide=c.del_slide,
-                cache=c.cache if 'cache' in c else True,
-                only_feature_extraction=c.only_feature_extraction,
-                keep_dir_structure=c.keep_dir_structure if 'keep_dir_structure' in c else False,
-                normalization_template=normalization_template_path,
+                feature_extractor=c.feat_extractor,
+                device=c.device,
                 batch_size = c.batch_size if 'batch_size' in c else 64,
-                device=c.device
+                target_microns=c.microns,
+                # tile_size=c.patch_size,
+                cores=c.cores,
+                normalize=c.norm,
+                normalization_template=normalization_template_path,
+                cache=c.cache if 'cache' in c else True,
+                keep_dir_structure=c.keep_dir_structure if 'keep_dir_structure' in c else False,
+                delete_slide=c.del_slide,    
             ) 
             current, peak = tracemalloc.get_traced_memory()
             print(f"Current memory usage: {current / 1024 / 1024} MB; Peak: {peak / 1024 / 1024} MB")

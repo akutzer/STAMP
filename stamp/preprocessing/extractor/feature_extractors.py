@@ -137,7 +137,7 @@ class FeatureExtractor:
 def store_metadata(
     outdir: Path,
     extractor_name: str,
-    patch_size: Tuple[int, int],
+    tile_size: Tuple[int, int],
     target_microns: int,
     normalized: bool,
 ):
@@ -147,7 +147,7 @@ def store_metadata(
             "augmented_repetitions": 0,
             "patches_normalized": normalized,
             "microns": target_microns,
-            "patch_size": patch_size,
+            "tile_size": tile_size,
         }, f)
 
 

@@ -1,39 +1,31 @@
 from typing import Tuple
 import numpy as np
 import cv2
-import PIL
+from PIL import Image
 
 
-def canny_filter(patch: np.array) -> bool:
-    h, w = patch.shape[:2]
-    if h * w == 0: return False
+def canny_filter(tile: np.ndarray, low_threshold: int = 40, high_threshold: int = 100, edge_threshold: float = 2.0) -> bool:
+    """Determine if a patch contains significant edges, indicating tissue."""
+    h, w = tile.shape[:2]
+    if h * w == 0:
+        return False
+    
+    tile_gray = np.array(Image.fromarray(tile).convert("L"))
 
-    patch_img = PIL.Image.fromarray(patch)
-    patch_gray = np.array(patch_img.convert("L"))
-    # tile_to_grayscale is an PIL.Image.Image with image mode L
-    # Note: If you have an L mode image, that means it is
-    # a single channel image - normally interpreted as grayscale.
-    # The L means that is just stores the Luminance.
-    # It is very compact, but only stores a grayscale, not color.
+    # tile_gray = cv2.GaussianBlur(tile_gray, (5, 5), 0)
+    edges = cv2.Canny(tile_gray, low_threshold, high_threshold, L2gradient=True)
+    edges = edges / (np.max(edges) + 1e-8)
+    edges = np.sum(edges) / (h * w) * 100
 
-    # hardcoded thresholds
-    edge = cv2.Canny(patch_gray, 40, 100, L2gradient=True)
-    edge = edge / (np.max(edge) + 1e-8)
-    edge = (np.sum(np.sum(edge)) / (h * w) * 100)
-
-    # hardcoded limit. Less or equal to 2 edges will be rejected (i.e., not saved)
-    return edge >= 2
+    return edges >= edge_threshold
 
 
-def filter_background(patches: np.array, patches_coords: np.array) -> Tuple[np.ndarray, np.ndarray]:
-    """Returns the patches which do not only contain background."""
-    n = len(patches)
-    has_tissue = np.zeros((n,), dtype=np.bool_)
+def filter_background(patches: np.ndarray, coordinates: np.ndarray) -> Tuple[np.ndarray, np.ndarray, int]:
+    """Filter out patches that only contain background based on edge detection."""
+    has_edges = np.array([canny_filter(patch) for patch in patches], dtype=np.bool_)
 
-    for k, patch in enumerate(patches):
-        has_tissue[k] = canny_filter(patch)
-   
-    patches = patches[has_tissue]
-    patches_coords = patches_coords[has_tissue]
+    patches = patches[has_edges]
+    coordinates = coordinates[has_edges]
+    num_rejected = np.sum(~has_edges).item()
 
-    return patches, patches_coords, np.sum(~has_tissue).item()
+    return patches, coordinates, num_rejected
