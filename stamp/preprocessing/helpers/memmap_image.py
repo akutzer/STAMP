@@ -16,6 +16,7 @@ class AsyncMemmapImage:
         max_workers: Optional[int] = None
     ):
         self._filename = Path(mkdtemp()) / 'memmap.dat'
+        print(self._filename)
         self.shape = shape
         self.dtype = dtype
         self.mode = mode
@@ -95,3 +96,5 @@ class AsyncMemmapImage:
         """
         self.executor.shutdown(wait=True)
         del self.memmap
+        self._filename.unlink(missing_ok=True)
+        self._filename.parent.rmdir()
