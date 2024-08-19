@@ -1,22 +1,22 @@
+import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Tuple
-import hashlib
+
+import h5py
+import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 from torchvision.transforms import v2 as transforms
 from torchvision.transforms import ToTensor
-import numpy as np
-import h5py
-from tqdm import tqdm
-import os
-import uni
 
+import uni
 from stamp.preprocessing.extractor.swin_transformer import swin_tiny_patch4_window7_224, ConvStem
 
 
-__version__ = "1.0.3_15-04-2024"
+__version__ = "1.2.0_19-08-2024"
 
 
 def get_digest(file: str):

@@ -6,44 +6,6 @@ import numpy as np
 from PIL import Image
 
 
-def view_as_tiles(
-    region: np.ndarray, 
-    tile_size: Tuple[int, int],
-    position: Tuple[int, int]
-) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Splits a region of an image into smaller tiles.
-
-    Parameters:
-        region (np.ndarray): The region to be split into tiles.
-        tile_size (Tuple[int, int]): The size of each tile (height, width).
-        position (Tuple[int, int]): The (row, column) position of the top-left corner of the region.
-
-    Returns:
-        Tuple[np.ndarray, np.ndarray]: Array of tiles and their respective positions in the original image.
-    """
-    h, w, c = region.shape
-    tile_h, tile_w = tile_size
-    
-    assert h % tile_h == 0, f"Region height {h} is not divisible by tile height {tile_h}"
-    assert w % tile_w == 0, f"Region width {w} is not divisible by tile width {tile_w}"
-    
-    n_tiles_h = h // tile_h
-    n_tiles_w = w // tile_w
-    
-
-    tiles = region.reshape(n_tiles_h, tile_h, n_tiles_w, tile_w, c)
-    tiles = tiles.transpose(0, 2, 1, 3, 4)
-    tiles = tiles.reshape(-1, tile_h, tile_w, c)
-
-    # Calculate the positions of the top-left corner of each tile in the original image
-    x, y = np.arange(n_tiles_w), np.arange(n_tiles_h)
-    xx, yy = np.meshgrid(x, y)
-    tile_indices = np.vstack([yy.ravel(), xx.ravel()]).T
-    tile_positions = tile_size * tile_indices + position
-    
-    return tiles, tile_positions
-
 
 class AsyncMemmapImage:
     def __init__(
@@ -107,7 +69,9 @@ class AsyncMemmapImage:
             output_path (Union[Path, str]): Path where the image file will be saved.
         """
         # Ensure all threads complete before saving the image
+        print("Waiting for shutdown")
         self.executor.shutdown(wait=True)
+        print("All shutdown")
 
         if len(self.shape) == 3 and self.shape[2] == 3:  # RGB data
             image_data = self.memmap.astype('uint8')

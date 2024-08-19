@@ -1,10 +1,3 @@
-__author__ = "Omar El Nahhas"
-__copyright__ = "Copyright 2023, Kather Lab"
-__license__ = "MIT"
-__version__ = "0.1.0"
-__maintainer__ = ["Omar"]
-__email__ = "omar.el_nahhas@tu-dresden.de"
-
 import os
 from pathlib import Path
 import logging
@@ -23,8 +16,8 @@ from .normalizer.normalizer import MacenkoNormalizer
 from .extractor.feature_extractors import FeatureExtractor, store_features, store_metadata
 from .helpers.common import supported_extensions
 from .helpers.exceptions import MPPExtractionError
-from .helpers.load_regions import AsyncRegionLoader, JPEGRegionLoader
-from .helpers.load_patches import AsyncMemmapImage, view_as_tiles
+from .helpers.chunk_loaders import AsyncChunkLoader, JPEGChunkLoader, view_as_tiles
+from .helpers.memmap_image import AsyncMemmapImage
 from .helpers.background_rejection import filter_background
 
 from memory_profiler import profile
@@ -68,7 +61,7 @@ def check_write_permissions(directory: Path) -> None:
 def preprocess(
     wsi_dir: Path, output_dir: Path, model_path: Path, cache_dir: Path,
     feature_extractor: str = "ctp", device: str = "cuda", batch_size: int = 64,
-    target_microns: int = 256, tile_size: int = 224, cores: int = 8,
+    target_microns: int = 256, tile_size: int = 224, cores: int = 4,
     normalize: bool = False, normalization_template: Optional[Path] = None,
     cache: bool = False, keep_dir_structure: bool = False, use_cache: bool = False,
     delete_slide: bool = False
@@ -118,10 +111,12 @@ def preprocess(
     logging.info(f"Normalize: {normalize} | Target Microns: {target_microns} | Tile Size: {tile_size} | MPP: {target_mpp}")
     logging.info(f"Model: {extractor.model_name}\n")
 
+    max_workers = min(32, cores + 4)
     print(f"Current working directory: {os.getcwd()}")
     print(f"Stored logfile in {logdir}")
     print(f"Number of CPUs in the system: {os.cpu_count()}")
-    print(f"Number of CPU cores used: {cores}")
+    print(f"Number of CPU cores to use: {cores}")
+    print(f"Max. Number of Threads to use: {max_workers}")
     print(f"GPU is available: {has_gpu}")
     if has_gpu:
         print(f"Number of GPUs in the system: {torch.cuda.device_count()}, using device {device}")
@@ -187,8 +182,7 @@ def preprocess(
             with lock_file(slide_path):
                 if (slide_jpg := slide_cache_dir / "canny_slide.jpg").exists() and use_cache:
                     try:
-                        region_loader = JPEGRegionLoader(slide_jpg, tile_size=tile_size[0])
-                        print("JPEGRegionLoader")
+                        chunk_loader = JPEGChunkLoader(slide_jpg, tile_size=tile_size[0])
                     except Exception as e:
                         logging.error(f"Failed loading cached slide, trying to load WSI... Error: {e}")
                         if use_cache:
@@ -199,8 +193,8 @@ def preprocess(
                     try:
                         slide = openslide.OpenSlide(slide_path)
                         original_slide_size = slide.dimensions
-                        region_loader = AsyncRegionLoader(
-                            slide, target_microns=target_microns, target_tile_size=tile_size[0], max_workers=cores * 2
+                        chunk_loader = AsyncChunkLoader(
+                            slide, target_microns=target_microns, target_tile_size=tile_size[0], max_workers=max_workers
                         )
                     except openslide.lowlevel.OpenSlideUnsupportedFormatError:
                         logging.error("Unsupported format for slide, skipping...")
@@ -212,25 +206,25 @@ def preprocess(
                         continue
                 
                 try:
-                    slide_size = (region_loader.height, region_loader.width)
+                    slide_size = (chunk_loader.height, chunk_loader.width)
                     embeddings, coords = [], []
 
                     if cache and not slide_jpg.exists():
-                        canny_img = AsyncMemmapImage(shape=(*slide_size, 3), max_workers=cores * 2)
+                        canny_img = AsyncMemmapImage(shape=(*slide_size, 3), max_workers=max_workers)
 
                     total_rejected, total_tiles = 0, 0
 
-                    for region, position in tqdm(region_loader, leave=False):
-                        # `region`: 3D numpy array of shape (region_height, region_width, 3) representing the current region of the WSI
-                        # `position`: (y, x) tuple representing tje position of the top-left corner of a region
+                    for chunk, position in tqdm(chunk_loader, leave=False):
+                        # `chunk`: 3D numpy array of shape (chunk_height, chunk_width, 3) representing the current chunk of the WSI
+                        # `position`: (y, x) tuple representing tje position of the top-left corner of a chunk
 
-                        if region is None:
+                        if chunk is None:
                             continue
                             
-                        # Break the region into small tiles and get their coordinates
+                        # Break the chunk into small tiles and get their coordinates
                         # `tiles`: (num_tiles, tile_height, tile_width, 3)
                         # `tile_coords`: (num_tiles, 2) where each row represents (y, x) position of the top-left corner of a tile
-                        tiles, tile_coords = view_as_tiles(region, tile_size, position)
+                        tiles, tile_coords = view_as_tiles(chunk, tile_size, position)
                         
                         # Remove completely black tiles (i.e., tiles where all pixel values are 0 across all channels)
                         # These tiles may be outside the slide's boundaries or have been rejected by previous processing steps (in the case of reading from a canny_slide.jpg)
@@ -265,7 +259,7 @@ def preprocess(
                     error_slides.append(slide_name)
                     continue
                 
-                del region_loader
+                del chunk_loader
                 if not slide_jpg.exists():
                     del slide
             
