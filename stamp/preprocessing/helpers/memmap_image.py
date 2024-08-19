@@ -2,9 +2,9 @@ from pathlib import Path
 from tempfile import mkdtemp
 from typing import Tuple, Optional, Union
 from concurrent.futures import ThreadPoolExecutor
+import threading
 import numpy as np
 from PIL import Image
-
 
 
 class AsyncMemmapImage:
@@ -21,6 +21,7 @@ class AsyncMemmapImage:
         self.mode = mode
         self.memmap = np.memmap(self._filename, dtype=dtype, mode=mode, shape=shape)
         self.executor = ThreadPoolExecutor(max_workers=max_workers)
+        self.lock = threading.Lock()
 
     def write_chunk(self, data: np.ndarray, position: Tuple[int, int]) -> None:
         """
@@ -30,36 +31,43 @@ class AsyncMemmapImage:
             data (np.ndarray): Data chunk to be written.
             position (Tuple[int, int]): (row, column) position in the image where the data will be written.
         """
-        def _write(fp: np.memmap, data: np.ndarray, position: Tuple[int, int]):
+        def _write(memmap: np.memmap, data: np.ndarray, position: Tuple[int, int]):
             h_start, w_start = position
             h_end = min(h_start + data.shape[0], self.shape[0])
             w_end = min(w_start + data.shape[1], self.shape[1])
 
-            # slice data if it exceeds the memmap boundaries
-            fp[h_start:h_end, w_start:w_end] = data[:h_end - h_start, :w_end - w_start]
-            fp.flush()
+            with self.lock:
+                # slice data if it exceeds the memmap boundaries
+                memmap[h_start:h_end, w_start:w_end] = data[:h_end - h_start, :w_end - w_start]
+                memmap.flush()
         
         self.executor.submit(_write, self.memmap, data, position)
     
-    def write_tiles(self, tiles: np.ndarray, positions: np.ndarray) -> None:
+    def write_tiles(self, tiles: np.ndarray, positions: np.ndarray, use_threading: bool = True) -> None:
         """
-        Asynchronously write multiple tiles of data to the memmap.
+        Write multiple tiles of data to the memmap, either asynchronously (with threading) or synchronously.
 
         Parameters:
             tiles (np.ndarray): Array of tiles to be written.
             positions (np.ndarray): Array of (row, column) positions for each tile.
+            use_threading (bool): Whether to write asynchronously using threads. Defaults to True.
         """
-        def _write(fp: np.memmap, tiles: np.ndarray, positions: np.ndarray):
+        def _write(memmap: np.memmap, tiles: np.ndarray, positions: np.ndarray):
             for tile, position in zip(tiles, positions):
                 h_start, w_start = position
                 h_end = min(h_start + tile.shape[0], self.shape[0])
                 w_end = min(w_start + tile.shape[1], self.shape[1])
 
-                # slice data if it exceeds the memmap boundaries
-                fp[h_start:h_end, w_start:w_end] = tile[:h_end - h_start, :w_end - w_start]
-            fp.flush()
+                with self.lock:
+                    # slice data if it exceeds the memmap boundaries
+                    memmap[h_start:h_end, w_start:w_end] = tile[:h_end - h_start, :w_end - w_start]
+            with self.lock:
+                memmap.flush()
         
-        self.executor.submit(_write, self.memmap, tiles, positions)
+        if use_threading:
+            self.executor.submit(_write, self.memmap, tiles, positions)
+        else:
+            _write(self.memmap, tiles, positions)
 
     def save(self, output_path: Union[Path, str]) -> None:
         """

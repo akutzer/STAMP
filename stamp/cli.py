@@ -6,14 +6,17 @@ import os
 from typing import Iterable, Optional
 import shutil
 
+
 NORMALIZATION_TEMPLATE_URL = "https://github.com/Avic3nna/STAMP/blob/main/resources/normalization_template.jpg?raw=true"
 CTRANSPATH_WEIGHTS_URL = "https://drive.google.com/u/0/uc?id=1DoDx_70_TLj98gTf6YTXnu4tFhsFocDX&export=download"
 DEFAULT_RESOURCES_DIR = Path(__file__).with_name("resources")
 DEFAULT_CONFIG_FILE = Path("config.yaml")
 STAMP_FACTORY_SETTINGS = Path(__file__).with_name("config.yaml")
 
+
 class ConfigurationError(Exception):
     pass
+
 
 def check_path_exists(path):
     directories = path.split(os.path.sep)
@@ -43,6 +46,7 @@ def _config_has_key(cfg: DictConfig, key: str):
     except KeyError:
         return False
     return True
+
 
 def require_configs(cfg: DictConfig, keys: Iterable[str], prefix: Optional[str] = None,
                     paths_to_check: Iterable[str] = []):
@@ -76,6 +80,7 @@ def create_config_file(config_file: Optional[Path]):
     shutil.copy(STAMP_FACTORY_SETTINGS, config_file)
     print(f"Created new config file at {config_file.absolute()}")
 
+
 def resolve_config_file_path(config_file: Optional[Path]) -> Path:
     """Resolve the path to the config file, falling back to the default config file if not specified."""
     if config_file is None:
@@ -89,6 +94,7 @@ def resolve_config_file_path(config_file: Optional[Path]) -> Path:
     if not config_file.exists():
         raise ConfigurationError(f"Config file {Path(config_file).absolute()} not found (run `stamp init` to create the config file or use the `--config` flag to specify a different config file)")
     return config_file
+
 
 def run_cli(args: argparse.Namespace):
     # Handle init command
@@ -144,7 +150,7 @@ def run_cli(args: argparse.Namespace):
         case "preprocess":
             require_configs(
                 cfg,
-                ["output_dir", "wsi_dir", "cache_dir", "microns", "cores", "norm", "del_slide", "only_feature_extraction", "device", "feat_extractor"],
+                ["output_dir", "wsi_dir", "cache_dir", "microns", "cores", "norm", "del_slide", "device", "feat_extractor"],
                 prefix="preprocessing",
                 paths_to_check=["wsi_dir"]
             )
@@ -175,6 +181,7 @@ def run_cli(args: argparse.Namespace):
                 normalization_template=normalization_template_path,
                 cache=c.cache if 'cache' in c else True,
                 keep_dir_structure=c.keep_dir_structure if 'keep_dir_structure' in c else False,
+                only_feature_extraction=c.only_feature_extraction if 'only_feature_extraction' in c else False,
                 delete_slide=c.del_slide,
                 preload_wsi=c.preload_wsi if 'preload_wsi' in c else False
             )
@@ -267,6 +274,7 @@ def run_cli(args: argparse.Namespace):
         case _:
             raise ConfigurationError(f"Unknown command {args.command}")
 
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="stamp", description="STAMP: Solid Tumor Associative Modeling in Pathology")
     parser.add_argument("--config", "-c", type=Path, default=None, help=f"Path to config file (if unspecified, defaults to {DEFAULT_CONFIG_FILE.absolute()} or the default STAMP config file shipped with the package if {DEFAULT_CONFIG_FILE.absolute()} does not exist)")
@@ -295,6 +303,7 @@ def main() -> None:
     except ConfigurationError as e:
         print(e)
         exit(1)
+
 
 if __name__ == "__main__":
     main()

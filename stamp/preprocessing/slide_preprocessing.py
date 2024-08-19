@@ -245,7 +245,7 @@ def preprocess(
                             continue
                         
                         if cache and not slide_jpg.exists():
-                            canny_img.write_tiles(tiles, tile_coords)
+                            canny_img.write_tiles(tiles, tile_coords, use_threading=True)
 
                         embeddings.append(extractor.extract(tiles, cores=0, batch_size=min(tiles.shape[0], batch_size)))
                         coords.append(tile_coords)
@@ -285,6 +285,7 @@ def preprocess(
                 
                 if cache and not slide_jpg.exists():
                     canny_img.save(slide_cache_dir / "canny_slide.jpg")
+                    canny_img.close()
                     del canny_img
 
                 logging.info(f"Successfully preprocessed slide ({time.time() - start_loading_time:.2f} seconds)")
