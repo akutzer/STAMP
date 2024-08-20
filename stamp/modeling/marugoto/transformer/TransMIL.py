@@ -84,8 +84,8 @@ class Attention(nn.Module):
             mask = mask.repeat(self.heads, 1, 1)
 
         x = self.norm(x)        
-        attn_output, _ = self.mhsa(x, x, x, need_weights=False, attn_mask=mask)
-        return attn_output
+        attn_output, attn_output_weights = self.mhsa(x, x, x, need_weights=True, attn_mask=mask, average_attn_weights=False)
+        return attn_output, attn_output_weights
 
 
 class Transformer(nn.Module):
@@ -101,11 +101,13 @@ class Transformer(nn.Module):
         self.norm = norm_layer(dim)
 
     def forward(self, x, mask=None):
+        # attns = []
         for attn, ff in self.layers:
-            x_attn = attn(x, mask=mask)
+            x_attn, attn_output_weights = attn(x, mask=mask)
+            # attns.append(attn_output_weights)
             x = x_attn + x
             x = ff(x) + x
-        return self.norm(x)
+        return self.norm(x), [attn_output_weights]
 
 
 class TransMIL(nn.Module):
@@ -151,7 +153,8 @@ class TransMIL(nn.Module):
             mask = (~mask[:, None, :]).repeat(1, (n + add_cls), 1) # shape: (B, L, L)
             # mask = (~mask[:, None, :]).expand(-1, (n + add_cls), -1)
 
-        x = self.transformer(x, mask)
+        x, attns = self.transformer(x, mask)
+        self.attns = attns
 
         if mask is not None and self.pool == 'mean':
             x = torch.cumsum(x, dim=1)[torch.arange(b), lens - 1]

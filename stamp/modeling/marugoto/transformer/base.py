@@ -24,18 +24,40 @@ __all__ = ['train', 'deploy']
 T = TypeVar('T')
 
 
+class PenaltyCrossEntropy(nn.Module):
+    def __init__(self, model, weight=None, size_average=None, ignore_index=-100, reduce=None, reduction='mean', label_smoothing=0.0):
+        super().__init__()
+        self.model = model
+        self.loss = nn.CrossEntropyLoss(weight, size_average, ignore_index, reduce, reduction, label_smoothing)
+    
+    def forward(self, pred, target):
+        # pred, attns = pred
+        loss = self.loss(pred, target)
+
+        # compute mean of entropy for the attention weights of the final MHSA
+        attns = self.model.attns
+        entropy = torch.sum(torch.special.entr(attns[-1] + 1e-8), axis=-1)
+        # mean the entropy of the [CLS] token attentions
+        entropy = torch.mean(entropy[..., 0])
+        # print(loss, 5e-2 * entropy)
+
+        # loss = loss + 5e-2 * entropy
+        loss = loss + 5e-2 * entropy
+        return loss
+
+
 def train(
     *,
     bags: Sequence[Iterable[Path]],
     targets: Tuple[SKLearnEncoder, np.ndarray],
     add_features: Iterable[Tuple[SKLearnEncoder, Sequence[Any]]] = [],
     valid_idxs: np.ndarray,
-    n_epoch: int = 32,
-    patience: int = 8,
+    n_epoch: int = 100,
+    patience: int = 10,
     path: Optional[Path] = None,
     batch_size: int = 64,
     cores: int = 8,
-    plot: bool = False
+    plot: bool = True
 ) -> Learner:
     """Train a MLP on image features.
 
@@ -57,7 +79,7 @@ def train(
         add_features=[
             (enc, vals[~valid_idxs])
             for enc, vals in add_features],
-        bag_size=512)
+        bag_size=1024)
 
     valid_ds = make_dataset(
         bags=bags[valid_idxs],
@@ -83,7 +105,7 @@ def train(
     # for binary classification num_classes=2
     model = TransMIL(
         num_classes=len(target_enc.categories_[0]), input_dim=feature_dim,
-        dim=512, depth=2, heads=8, mlp_dim=512, dropout=.0
+        dim=512, depth=2, heads=8, mlp_dim=512, dropout=.1
     )
     # TODO:
     # maybe increase mlp_dim? Not necessary 4*dim, but maybe a bit?
@@ -101,9 +123,13 @@ def train(
     # reorder according to vocab
     weight = torch.tensor(
         list(map(weight.get, target_enc.categories_[0])), dtype=torch.float32, device=device)
-    loss_func = nn.CrossEntropyLoss(weight=weight)
+    loss_func = PenaltyCrossEntropy(model, weight=weight) #nn.CrossEntropyLoss(weight=weight)
+    # loss_func = nn.CrossEntropyLoss(weight=weight)
 
     dls = DataLoaders(train_dl, valid_dl, device=device)
+    # for sample in dls:
+    #     print(sample.shape)
+    #     exit(0)
 
     learn = Learner(
         dls,
@@ -120,7 +146,8 @@ def train(
         CSVLogger(),
         # MixedPrecision(amp_mode=AMPMode.BF16)
     ]
-    learn.fit_one_cycle(n_epoch=n_epoch, reset_opt=True, lr_max=1e-4, wd=1e-2, cbs=cbs)
+    # learn.fit_one_cycle(n_epoch=n_epoch, reset_opt=True, lr_max=1e-4, wd=1e-2, cbs=cbs)
+    learn.fit(n_epoch=n_epoch, lr=1e-5, wd=1e-2, cbs=cbs)
     
     # Plot training and validation losses as well as learning rate schedule
     if plot:
@@ -131,9 +158,9 @@ def train(
         plt.savefig(path_plots / 'losses_plot.png')
         plt.close()
 
-        learn.recorder.plot_sched()
-        plt.savefig(path_plots / 'lr_scheduler.png')
-        plt.close()
+        # learn.recorder.plot_sched()
+        # plt.savefig(path_plots / 'lr_scheduler.png')
+        # plt.close()
 
     return learn
 
