@@ -62,10 +62,9 @@ def preprocess(
     feature_extractor: str = "ctp", device: str = "cuda", batch_size: int = 64,
     target_microns: int = 256, tile_size: int = 224, cores: int = 4,
     normalize: bool = False, normalization_template: Optional[Path] = None,
-    cache: bool = False, keep_dir_structure: bool = False, only_feature_extraction: bool = False,
+    cache: bool = False, keep_dir_structure: bool = False, use_cache: bool = False,
     delete_slide: bool = False, preload_wsi: bool = False
 ) -> None:
-    
     # Remove old lock files
     for lockfile in wsi_dir.glob("**/*.lock"):
         if time.time() - lockfile.stat().st_mtime > 60 * 60:
@@ -135,7 +134,6 @@ def preprocess(
     # TODO: remove
     # img_name = "norm_slide.jpg" if norm else "canny_slide.jpg"
 
-
     # Scan for existing feature files
     logging.info("Scanning for existing feature files...")
     existing_slides = [f.stem for f in output_file_dir.glob("**/*.h5")] if output_file_dir.exists() else []
@@ -179,14 +177,13 @@ def preprocess(
         if not feature_output_path.with_suffix('.h5').exists() and not slide_path.with_suffix('.lock').exists():
             start_loading_time = time.time()
             with lock_file(slide_path):
-                if (slide_jpg := slide_cache_dir / "canny_slide.jpg").exists() and only_feature_extraction:
+                if (slide_jpg := slide_cache_dir / "canny_slide.jpg").exists() and use_cache:
                     try:
                         chunk_loader = JPEGChunkLoader(slide_jpg, tile_size=tile_size[0])
                     except Exception as e:
-                        logging.error(f"Failed loading cached slide, trying to load WSI... Error: {e}")
-                        if only_feature_extraction:
-                            error_slides.append(slide_name)
-                            continue
+                        logging.error(f"Failed loading cached slide... Error: {e}")
+                        error_slides.append(slide_name)
+                        continue
                 
                 else:
                     try:
@@ -213,15 +210,14 @@ def preprocess(
                     slide_size = (chunk_loader.height, chunk_loader.width)
                     embeddings, coords = [], []
 
-                    if cache and not slide_jpg.exists():
+                    if generate_cache := (cache and not slide_jpg.exists()):
                         canny_img = AsyncMemmapImage(shape=(*slide_size, 3), max_workers=max_workers)
 
                     total_rejected, total_tiles = 0, 0
-
+                    # tile_buffer, tile_buffer_size = [], 0
                     for chunk, position in tqdm(chunk_loader, leave=False):
                         # `chunk`: 3D numpy array of shape (chunk_height, chunk_width, 3) representing the current chunk of the WSI
-                        # `position`: (row, column) tuple representing tje position of the top-left corner of a chunk
-
+                        # `position`: (row, column) tuple representing the position of the top-left corner of a chunk
                         if chunk is None:
                             continue
                             
@@ -244,12 +240,22 @@ def preprocess(
                         if tiles.shape[0] == 0:
                             continue
                         
-                        if cache and not slide_jpg.exists():
+                        if generate_cache:
                             canny_img.write_tiles(tiles, tile_coords, use_threading=True)
-
-                        embeddings.append(extractor.extract(tiles, cores=0, batch_size=min(tiles.shape[0], batch_size)))
+                        
                         coords.append(tile_coords)
-                
+                        embeddings.append(extractor.single_extract(tiles))
+
+                        # tile_buffer_size += tiles.shape[0]
+                        # tile_buffer.append(tiles)
+                        # if tile_buffer_size > 1024:
+                        #     embeddings.append(extractor.extract(tile_buffer, cores=2, batch_size=batch_size))
+                        #     tile_buffer, tile_buffer_size = [], 0
+
+                    # if len(tile_buffer) > 0:
+                    #     embeddings.append(extractor.extract(tile_buffer, cores=2, batch_size=batch_size))
+                    #     tile_buffer, tile_buffer_size = [], 0
+
                 except MPPExtractionError:
                     if delete_slide:
                         logging.error("MPP missing in slide metadata, deleting slide and skipping...")
@@ -262,13 +268,16 @@ def preprocess(
                     logging.error(f"Failed loading slide, skipping... Error: {e}")
                     error_slides.append(slide_name)
                     continue
+                except Exception as e:
+                    logging.error(f"Failed loading slide, skipping... Unknown error: {e}")
+                    error_slides.append(slide_name)
+                    continue
                 
                 del chunk_loader
-                if not slide_jpg.exists():
-                    del slide
+                del slide
             
                 embeddings = np.concatenate(embeddings, axis=0)
-                coords = np.concatenate(coords, axis=0) 
+                coords = np.concatenate(coords, axis=0)
 
                 if embeddings.shape[0] > 0:
                     # Order embeddings row and then column-wise
@@ -283,16 +292,20 @@ def preprocess(
                     logging.warning("No tiles remain for feature extraction after preprocessing. Skipping...")
                     continue
                 
-                if cache and not slide_jpg.exists():
-                    canny_img.save(slide_cache_dir / "canny_slide.jpg")
-                    canny_img.close()
-                    del canny_img
+                try:
+                    if generate_cache:
+                        canny_img.save(slide_cache_dir / "canny_slide.jpg")
+                        canny_img.close()
+                        del canny_img
+                except Exception as e:
+                    logging.warning(f"Failed storing cache file... Error: {e}")
 
-                logging.info(f"Successfully preprocessed slide ({time.time() - start_loading_time:.2f} seconds)")
-                if not slide_jpg.exists():
-                    logging.info(f"Reshaped original WSI of shape {original_slide_size} -> {slide_size}")
-                logging.info(f"Canny background rejection: rejected {total_rejected}/{total_tiles} tiles")
-                logging.info(f"Embedded {total_tiles - total_rejected} tiles in total")
+                logging.info(f"Slide preprocessing completed in {time.time() - start_loading_time:.2f} seconds.")
+                if not use_cache:
+                    logging.info(f"Reshaped original WSI from {original_slide_size} to {slide_size}.")
+                logging.info(f"Canny edge detection applied for background rejection: {total_rejected}/{total_tiles} tiles rejected.")
+                logging.info(f"Successfully embedded {total_tiles - total_rejected} tiles.")
+
 
         else:
             if feature_output_path.with_suffix('.h5').exists():

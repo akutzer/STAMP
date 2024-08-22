@@ -2,7 +2,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
-from typing import Tuple
+from typing import Tuple, Union, List
 
 import h5py
 import numpy as np
@@ -44,6 +44,9 @@ class FeatureExtractor:
         self.transform = transform
 
         self.device = torch.device(device)
+        if device.type == "cuda":
+            # allow for usage of TensorFloat32 as internal dtype for matmul on modern NVIDIA GPUs
+            torch.set_float32_matmul_precision("high")
         self.dtype = next(self.model.parameters()).dtype
 
     @classmethod
@@ -105,15 +108,15 @@ class FeatureExtractor:
         return extractor
 
     def extract(
-        self, patches: np.ndarray, cores: int = 2, batch_size: int = 64
+        self, tiles: Union[np.ndarray, List[np.ndarray]], cores: int = 2, batch_size: int = 64
     ) -> np.ndarray:
         """Extracts features from slide tiles.
 
         Args:
-            patches:  Array of shape (n_patches, patch_h, patch_w, 3)
+            tiles:  Array of shape (n_tiles, tile_h, tile_w, 3)
             cores:  Number of cores for dataloader
         """
-        dataset = SlideTileDataset(patches, self.transform)
+        dataset = SlideTileDataset(tiles, self.transform)
         dataloader = DataLoader(
             dataset,
             batch_size=batch_size,
@@ -125,12 +128,36 @@ class FeatureExtractor:
 
         features = []
         with torch.inference_mode():
-            for patches_batch in dataloader:
-                patches_batch = patches_batch.to(dtype=self.dtype, device=self.device)
-                features_batch = self.model(patches_batch).half().cpu()
+            for tiles_batch in dataloader:
+                tiles_batch = tiles_batch.to(dtype=self.dtype, device=self.device)
+                features_batch = self.model(tiles_batch).half()
                 features.append(features_batch)
 
-        features = torch.concat(features, dim=0).numpy()
+        features = torch.concat(features, dim=0).cpu().numpy()
+        return features
+    
+    def single_extract(self, tiles: np.ndarray) -> np.ndarray:
+        """Extracts features from slide tiles.
+
+        Args:
+            tiles:  Array of shape (n_tiles, tile_h, tile_w, 3)
+            cores:  Number of cores for dataloader
+        """
+        
+        tiles = torch.from_numpy(tiles).to(dtype=self.dtype, device=self.device)
+
+        mean = torch.tensor([0.485, 0.456, 0.406], dtype=self.dtype, device=self.device)
+        std = torch.tensor([0.229, 0.224, 0.225], dtype=self.dtype, device=self.device)
+
+        tiles = tiles / 255.0
+        tiles -= mean
+        tiles /= std
+
+        tiles = tiles.permute(0, 3, 1, 2)  # (N, H, W, C) -> (N, C, H, W)
+
+        with torch.inference_mode():
+            features = self.model(tiles).half().cpu().numpy()
+        
         return features
 
 
@@ -145,17 +172,17 @@ def store_metadata(
         json.dump({
             "extractor": extractor_name,
             "augmented_repetitions": 0,
-            "patches_normalized": normalized,
+            "tiles_normalized": normalized,
             "microns": target_microns,
             "tile_size": tile_size,
         }, f)
 
 
 def store_features(
-    outdir: Path, features: np.ndarray, patches_coords: np.ndarray, extractor_name: str
+    outdir: Path, features: np.ndarray, tiles_coords: np.ndarray, extractor_name: str
 ):
     with h5py.File(f"{outdir}.h5", "w") as f:
-        f["coords"] = patches_coords[:, ::-1]  # store as (w, h) not (h, w) for backwards compatibility
+        f["coords"] = tiles_coords[:, ::-1]  # store as (w, h) not (h, w) for backwards compatibility
         f["feats"] = features
         f["augmented"] = np.repeat([False, True], [features.shape[0], 0])
         assert len(f["feats"]) == len(f["augmented"])
@@ -164,17 +191,26 @@ def store_features(
 
 class SlideTileDataset(Dataset):
     def __init__(
-        self, patches: np.array, transform=None, *, repetitions: int = 1
+        self, tiles: Union[np.ndarray, List[np.ndarray]], transform=None, *, repetitions: int = 1
     ) -> None:
-        self.tiles = patches
-        self.tiles *= repetitions
+        self.tiles = tiles
+        if isinstance(self.tiles, list):
+            self._first_indices = np.cumsum([0] + [arr.shape[0] for arr in self.tiles[:-1]])
+        # self.tiles *= repetitions
         self.transform = transform
 
     def __len__(self) -> int:
+        if isinstance(self.tiles, list):
+            return sum(map(lambda x: x.shape[0], self.tiles))
         return len(self.tiles)
 
     def __getitem__(self, i) -> torch.Tensor:
-        image = self.tiles[i]
+        if isinstance(self.tiles, np.ndarray):
+            image = self.tiles[i]
+        else:
+            super_idx = np.argmax(self._first_indices > i) - 1
+            sub_idx = i - self._first_indices[super_idx] 
+            image = self.tiles[super_idx][sub_idx]
         if self.transform:
             image = self.transform(image)
 

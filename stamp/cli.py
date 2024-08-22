@@ -181,7 +181,7 @@ def run_cli(args: argparse.Namespace):
                 normalization_template=normalization_template_path,
                 cache=c.cache if 'cache' in c else True,
                 keep_dir_structure=c.keep_dir_structure if 'keep_dir_structure' in c else False,
-                only_feature_extraction=c.only_feature_extraction if 'only_feature_extraction' in c else False,
+                use_cache=c.use_cache if 'use_cache' in c else False,
                 delete_slide=c.del_slide,
                 preload_wsi=c.preload_wsi if 'preload_wsi' in c else False
             )

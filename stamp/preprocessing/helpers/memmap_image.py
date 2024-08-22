@@ -7,6 +7,9 @@ import numpy as np
 from PIL import Image
 
 
+Image.MAX_IMAGE_PIXELS = None
+
+
 class AsyncMemmapImage:
     def __init__(
         self, 
@@ -16,7 +19,6 @@ class AsyncMemmapImage:
         max_workers: Optional[int] = None
     ):
         self._filename = Path(mkdtemp()) / 'memmap.dat'
-        print(self._filename)
         self.shape = shape
         self.dtype = dtype
         self.mode = mode

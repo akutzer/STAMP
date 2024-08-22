@@ -181,8 +181,7 @@ class AsyncChunkLoader:
             np.ndarray: The loaded chunk as a numpy array.
         """
         # if the chunk goes outside the slide then openslide fills these values with 0
-        chunk = slide.read_region(position, 0, size).convert('RGB')
-        chunk = chunk.resize(target_size)
+        chunk = slide.read_region(position, 0, size).convert('RGB').resize(target_size)
         return np.array(chunk)
 
 
