@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 from torchvision.transforms import v2 as transforms
-from torchvision.transforms import ToTensor
+from torchvision.transforms import ToTensor, Normalize
 
 import uni
 from stamp.preprocessing.extractor.swin_transformer import swin_tiny_patch4_window7_224, ConvStem
@@ -48,6 +48,8 @@ class FeatureExtractor:
             # allow for usage of TensorFloat32 as internal dtype for matmul on modern NVIDIA GPUs
             torch.set_float32_matmul_precision("high")
         self.dtype = next(self.model.parameters()).dtype
+
+        self.mean, self.std = self._extract_mean_std(transform, self.dtype, self.device)
 
     @classmethod
     def init_ctranspath(cls, checkpoint_path: str, device: str) -> "FeatureExtractor":
@@ -107,6 +109,51 @@ class FeatureExtractor:
 
         return extractor
 
+    @classmethod
+    def init_dinov2(cls, device: str, **kwargs) -> "FeatureExtractor":
+        """Extracts features from slide tiles. 
+        Requirements: 
+            Permission from authors via huggingface: https://huggingface.co/MahmoodLab/UNI
+            Huggingface account with valid login token
+        On first model initialization, you will be prompted to enter your login token. The token is
+        then stored in ./home/<user>/.cache/huggingface/token. Subsequent inits do not require you to re-enter the token. 
+
+        Args:
+            device: "cuda" or "cpu"
+        """
+        
+        # loading the checkpoint weights
+        model_path = Path(f"{os.environ['STAMP_RESOURCES_DIR']}/dinov2/models--facebook--dinov2-large/snapshots/47b73eefe95e8d44ec3623f8890bd894b6ea2d6c/model.safetensors")
+        digest = get_digest(model_path)
+        model_name = f"facebook-dinov2-{digest[:8]}"
+
+        # initializing the model and updating the weights
+        from transformers import AutoImageProcessor, Dinov2Model
+
+        class Dinov2(Dinov2Model):
+            def forward(self, *args, **kwargs):
+                out = super().forward(*args, **kwargs)
+                return out.pooler_output
+        
+        model = Dinov2.from_pretrained(model_path.parent)
+
+        processor = AutoImageProcessor.from_pretrained(model_path.parent)
+        mean, std = processor.image_mean, processor.image_std
+        size = (processor.crop_size["height"], processor.crop_size["width"])
+
+        transform = transforms.Compose([
+            transforms.ToImage(),  # convert to tensor, only needed for PIL images
+            transforms.ToDtype(torch.uint8, scale=True),  # optional, most input are already uint8 at this point
+            transforms.Resize(size=size, antialias=True),
+            transforms.ToDtype(torch.float32, scale=True),  # normalize expects float input
+            transforms.Normalize(mean=mean, std=std),
+        ])
+
+        extractor = cls(model, model_name, transform, device)
+        print("DINOv2 model successfully initialized...\n")
+
+        return extractor
+
     def extract(
         self, tiles: Union[np.ndarray, List[np.ndarray]], cores: int = 2, batch_size: int = 64
     ) -> np.ndarray:
@@ -143,15 +190,11 @@ class FeatureExtractor:
             tiles:  Array of shape (n_tiles, tile_h, tile_w, 3)
             cores:  Number of cores for dataloader
         """
-        
         tiles = torch.from_numpy(tiles).to(dtype=self.dtype, device=self.device)
 
-        mean = torch.tensor([0.485, 0.456, 0.406], dtype=self.dtype, device=self.device)
-        std = torch.tensor([0.229, 0.224, 0.225], dtype=self.dtype, device=self.device)
-
         tiles = tiles / 255.0
-        tiles -= mean
-        tiles /= std
+        tiles -= self.mean
+        tiles /= self.std
 
         tiles = tiles.permute(0, 3, 1, 2)  # (N, H, W, C) -> (N, C, H, W)
 
@@ -159,6 +202,20 @@ class FeatureExtractor:
             features = self.model(tiles).half().cpu().numpy()
         
         return features
+
+    @staticmethod
+    def _extract_mean_std(transform, dtype=None, device=None):
+        for tf in transform.transforms:
+            if isinstance(tf, (transforms.Normalize, Normalize)):
+                mean = torch.tensor(tf.mean, dtype=dtype, device=device)
+                std = torch.tensor(tf.std, dtype=dtype, device=device)
+                break
+        else:
+            print("No `Normalize` transformation found!")
+            mean = torch.tensor([0., 0., 0.], dtype=dtype, device=device)
+            std = torch.tensor([1., 1., 1.], dtype=dtype, device=device)
+
+        return mean, std
 
 
 def store_metadata(
@@ -215,3 +272,4 @@ class SlideTileDataset(Dataset):
             image = self.transform(image)
 
         return image
+

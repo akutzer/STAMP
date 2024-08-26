@@ -113,6 +113,7 @@ def run_cli(args: argparse.Namespace):
     match args.command:
         case "init":
             return # this is handled above
+        
         case "setup":
             # Download normalization template
             normalization_template_path = Path(f"{os.environ['STAMP_RESOURCES_DIR']}/normalization_template.jpg")
@@ -125,14 +126,17 @@ def run_cli(args: argparse.Namespace):
                 r = requests.get(NORMALIZATION_TEMPLATE_URL)
                 with normalization_template_path.open("wb") as f:
                     f.write(r.content)
+            
             # Download feature extractor model
-            feat_extractor = cfg.preprocessing.feat_extractor
+            feat_extractor = cfg.preprocessing.feat_extractor.lower()
             if feat_extractor == 'ctp':
                 model_path = Path(f"{os.environ['STAMP_RESOURCES_DIR']}/ctranspath.pth")
             elif feat_extractor == 'uni':
                 model_path = Path(f"{os.environ['STAMP_RESOURCES_DIR']}/uni/vit_large_patch16_224.dinov2.uni_mass100k/pytorch_model.bin")
+            elif feat_extractor == 'dinov2':
+                model_path = Path(f"{os.environ['STAMP_RESOURCES_DIR']}/dinov2/models--facebook--dinov2-large/snapshots/47b73eefe95e8d44ec3623f8890bd894b6ea2d6c/model.safetensors")
             else:
-                raise ValueError(f"Unknown feature extractor `{feat_extractor}`. Must be either `ctp` or `uni`")
+                raise ValueError(f"Unknown feature extractor `{feat_extractor}`. Must be either `ctp`, `uni` or `dinov2`")
             model_path.parent.mkdir(parents=True, exist_ok=True)
             if model_path.exists():
                 print(f"Skipping download, feature extractor model already exists at {model_path}")
@@ -145,8 +149,14 @@ def run_cli(args: argparse.Namespace):
                     print(f"Downloading UNI weights")
                     from uni.get_encoder import get_encoder
                     get_encoder(enc_name='uni', checkpoint='pytorch_model.bin', assets_dir=f"{os.environ['STAMP_RESOURCES_DIR']}/uni")
+                elif feat_extractor == 'dinov2':
+                    print(f"Downloading DINOv2 weights")
+                    from transformers import AutoImageProcessor, AutoModel
+                    AutoImageProcessor.from_pretrained('facebook/dinov2-large', cache_dir=f"{os.environ['STAMP_RESOURCES_DIR']}/dinov2")
+                    AutoModel.from_pretrained('facebook/dinov2-large', cache_dir=f"{os.environ['STAMP_RESOURCES_DIR']}/dinov2")
         case "config":
             print(OmegaConf.to_yaml(cfg, resolve=True))
+
         case "preprocess":
             require_configs(
                 cfg,
@@ -159,10 +169,15 @@ def run_cli(args: argparse.Namespace):
             normalization_template_path = Path(f"{os.environ['STAMP_RESOURCES_DIR']}/normalization_template.jpg")
             if c.norm and not Path(normalization_template_path).exists():
                 raise ConfigurationError(f"Normalization template {normalization_template_path} does not exist, please run `stamp setup` to download it.")
-            if c.feat_extractor == 'ctp':
+            feat_extractor = c.feat_extractor.lower()
+            if feat_extractor == 'ctp':
                 model_path = f"{os.environ['STAMP_RESOURCES_DIR']}/ctranspath.pth"
-            elif c.feat_extractor == 'uni':
+            elif feat_extractor == 'uni':
                 model_path = f"{os.environ['STAMP_RESOURCES_DIR']}/uni/vit_large_patch16_224.dinov2.uni_mass100k/pytorch_model.bin"
+            elif feat_extractor == 'dinov2':
+                model_path = f"{os.environ['STAMP_RESOURCES_DIR']}/dinov2/models--facebook--dinov2-large/snapshots/47b73eefe95e8d44ec3623f8890bd894b6ea2d6c/model.safetensors"
+            else:
+                raise ValueError(f"Unknown feature extractor `{feat_extractor}`. Must be either `ctp`, `uni` or `dinov2`")
             if not Path(model_path).exists():
                 raise ConfigurationError(f"Feature extractor model {model_path} does not exist, please run `stamp setup` to download it.")
             from .preprocessing.slide_preprocessing import preprocess
@@ -171,7 +186,7 @@ def run_cli(args: argparse.Namespace):
                 output_dir=Path(c.output_dir),
                 model_path=Path(model_path),
                 cache_dir=Path(c.cache_dir),
-                feature_extractor=c.feat_extractor,
+                feature_extractor=feat_extractor,
                 device=c.device,
                 batch_size = c.batch_size if 'batch_size' in c else 64,
                 target_microns=c.microns,
@@ -185,6 +200,7 @@ def run_cli(args: argparse.Namespace):
                 delete_slide=c.del_slide,
                 preload_wsi=c.preload_wsi if 'preload_wsi' in c else False
             )
+
         case "train":
             require_configs(
                 cfg,
@@ -202,6 +218,7 @@ def run_cli(args: argparse.Namespace):
                                      cat_labels=c.cat_labels,
                                      cont_labels=c.cont_labels, 
                                      categories=c.categories)
+            
         case "crossval":
             require_configs(
                 cfg,
@@ -220,6 +237,7 @@ def run_cli(args: argparse.Namespace):
                                   cont_labels=c.cont_labels,
                                   categories=c.categories,
                                   n_splits=c.n_splits)
+            
         case "deploy":
             require_configs(
                 cfg,
@@ -238,6 +256,7 @@ def run_cli(args: argparse.Namespace):
                                       cont_labels=c.cont_labels,
                                       model_path=Path(c.model_path))
             print("Successfully deployed models")
+            
         case "statistics":
             require_configs(
                 cfg,
@@ -254,6 +273,7 @@ def run_cli(args: argparse.Namespace):
                           true_class=c.true_class,
                           output_dir=Path(c.output_dir))
             print("Successfully calculated statistics")
+
         case "heatmaps":
             require_configs(
                 cfg,
@@ -271,6 +291,7 @@ def run_cli(args: argparse.Namespace):
                  n_toptiles=int(c.n_toptiles),
                  overview=c.overview)
             print("Successfully produced heatmaps")
+
         case _:
             raise ConfigurationError(f"Unknown command {args.command}")
 
