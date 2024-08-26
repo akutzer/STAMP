@@ -1,5 +1,6 @@
 import re
 import math
+import signal
 from concurrent import futures
 from pathlib import Path
 from typing import Union, Tuple, Optional
@@ -133,6 +134,15 @@ class AsyncChunkLoader:
         
         self.executor = None
         self.future_to_pos = {}
+
+        # Register signal handler for graceful shutdown
+        signal.signal(signal.SIGINT, self._shutdown)
+
+    def _shutdown(self, signum=None, frame=None):
+        """Graceful shutdown of the executor after SIGINT."""
+        if self.executor:
+            self.executor.shutdown(wait=False, cancel_futures=True)
+        raise KeyboardInterrupt
             
     def __iter__(self) -> 'AsyncChunkLoader':
         """Initialize the executor and prepare to load chunks."""

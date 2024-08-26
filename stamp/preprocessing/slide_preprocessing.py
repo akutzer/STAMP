@@ -86,8 +86,10 @@ def preprocess(
         extractor = FeatureExtractor.init_uni(device)
     elif feature_extractor == "dinov2":
         extractor = FeatureExtractor.init_dinov2(device)
+    elif feature_extractor == "conch":
+        extractor = FeatureExtractor.init_conch(device)
     else:
-        raise ValueError(f"Unknown feature extractor `{feat_extractor}`. Must be either `ctp`, `uni` or `dinov2`")
+        raise ValueError(f"Unknown feature extractor `{feature_extractor}`. Must be either `ctp`, `uni`, `dinov2` or `conch`")
 
 
     # Create cache and output directories

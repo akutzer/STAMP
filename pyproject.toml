@@ -41,7 +41,9 @@ dependencies = [
   "numba~=0.58",
   "gdown~=4.7",
   "openpyxl~=3.1",
+  "transformers"
   "UNI@git+https://github.com/mahmoodlab/UNI.git"
+  "CONCH@git+https://github.com/mahmoodlab/CONCH.git"
 ]
 
 [project.scripts]

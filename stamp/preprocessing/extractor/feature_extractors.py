@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 from typing import Tuple, Union, List
+import types 
 
 import h5py
 import numpy as np
@@ -11,8 +12,10 @@ import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 from torchvision.transforms import v2 as transforms
 from torchvision.transforms import ToTensor, Normalize
+from transformers import AutoImageProcessor, Dinov2Model
 
 import uni
+from conch.open_clip_custom import create_model_from_pretrained
 from stamp.preprocessing.extractor.swin_transformer import swin_tiny_patch4_window7_224, ConvStem
 
 
@@ -51,6 +54,10 @@ class FeatureExtractor:
 
         self.mean, self.std = self._extract_mean_std(transform, self.dtype, self.device)
 
+        # with torch.no_grad():
+            # model = torch.jit.trace(model, torch.randn(1, 3, 224, 224, dtype=self.dtype, device=self.device))
+        # model = torch.compile(model)
+
     @classmethod
     def init_ctranspath(cls, checkpoint_path: str, device: str) -> "FeatureExtractor":
         # loading the checkpoint weights
@@ -58,7 +65,7 @@ class FeatureExtractor:
         assert digest == "7c998680060c8743551a412583fac689db43cec07053b72dfec6dcd810113539"
 
         model_name = f"xiyuewang-ctranspath-{digest[:8]}"
-        ctranspath_weights = torch.load(checkpoint_path, map_location=torch.device("cpu"))
+        ctranspath_weights = torch.load(checkpoint_path, map_location=torch.device("cpu"), weights_only=True)
 
         # initializing the model and updating the weights
         model = swin_tiny_patch4_window7_224(embed_layer=ConvStem, pretrained=False)
@@ -128,7 +135,6 @@ class FeatureExtractor:
         model_name = f"facebook-dinov2-{digest[:8]}"
 
         # initializing the model and updating the weights
-        from transformers import AutoImageProcessor, Dinov2Model
 
         class Dinov2(Dinov2Model):
             def forward(self, *args, **kwargs):
@@ -151,6 +157,41 @@ class FeatureExtractor:
 
         extractor = cls(model, model_name, transform, device)
         print("DINOv2 model successfully initialized...\n")
+
+        return extractor
+
+    @classmethod
+    def init_conch(cls, device: str, **kwargs) -> "FeatureExtractor":
+        """Extracts features from slide tiles. 
+        Requirements: 
+            Permission from authors via huggingface: https://huggingface.co/MahmoodLab/CONCH
+            Huggingface account with valid login token
+        On first model initialization, you will be prompted to enter your login token. The token is
+        then stored in ./home/<user>/.cache/huggingface/token. Subsequent inits do not require you to re-enter the token. 
+
+        Args:
+            device: "cuda" or "cpu"
+        """
+        
+        # loading the checkpoint weights
+        model_path = Path(f"{os.environ['STAMP_RESOURCES_DIR']}/conch/models--MahmoodLab--conch/snapshots/f9ca9f877171a28ade80228fb195ac5d79003357/pytorch_model.bin")
+        digest = get_digest(model_path)
+        model_name = f"mahmood-conch-{digest[:8]}"
+
+        # initializing the model and updating the weights
+        model, transform = create_model_from_pretrained("conch_ViT-B-16", checkpoint_path=str(model_path))
+        # CONCH implementations still uses transformsV1, which expects
+        # either a PILImage or Tensor as input, not a numpy array like in the current code,
+        # thus we have to move the ToTensor transform to the beginning 
+        # Additionally, this filters out the "_convert_to_rgb" function
+        transform.transforms = list(filter(lambda x: not isinstance(x, (ToTensor, types.FunctionType)), transform.transforms))
+        transform.transforms.insert(0, ToTensor())
+        print(model)
+        print(transform)
+        exit(0)
+
+        extractor = cls(model, model_name, transform, device)
+        print("UNI model successfully initialized...\n")
 
         return extractor
 

@@ -135,8 +135,10 @@ def run_cli(args: argparse.Namespace):
                 model_path = Path(f"{os.environ['STAMP_RESOURCES_DIR']}/uni/vit_large_patch16_224.dinov2.uni_mass100k/pytorch_model.bin")
             elif feat_extractor == 'dinov2':
                 model_path = Path(f"{os.environ['STAMP_RESOURCES_DIR']}/dinov2/models--facebook--dinov2-large/snapshots/47b73eefe95e8d44ec3623f8890bd894b6ea2d6c/model.safetensors")
+            elif feat_extractor == 'conch':
+                model_path = Path(f"{os.environ['STAMP_RESOURCES_DIR']}/conch/models--MahmoodLab--conch/snapshots/f9ca9f877171a28ade80228fb195ac5d79003357/pytorch_model.bin")
             else:
-                raise ValueError(f"Unknown feature extractor `{feat_extractor}`. Must be either `ctp`, `uni` or `dinov2`")
+                raise ValueError(f"Unknown feature extractor `{feat_extractor}`. Must be either `ctp`, `uni`, `dinov2` or `conch`")
             model_path.parent.mkdir(parents=True, exist_ok=True)
             if model_path.exists():
                 print(f"Skipping download, feature extractor model already exists at {model_path}")
@@ -154,6 +156,13 @@ def run_cli(args: argparse.Namespace):
                     from transformers import AutoImageProcessor, AutoModel
                     AutoImageProcessor.from_pretrained('facebook/dinov2-large', cache_dir=f"{os.environ['STAMP_RESOURCES_DIR']}/dinov2")
                     AutoModel.from_pretrained('facebook/dinov2-large', cache_dir=f"{os.environ['STAMP_RESOURCES_DIR']}/dinov2")
+                elif feat_extractor == 'conch':
+                    print("Downloading CONCH weights")
+                    from huggingface_hub import login
+                    from conch.open_clip_custom import create_model_from_pretrained
+                    login()  # login with your User Access Token, found at https://huggingface.co/settings/tokens
+                    create_model_from_pretrained('conch_ViT-B-16', "hf_hub:MahmoodLab/conch", cache_dir=f"{os.environ['STAMP_RESOURCES_DIR']}/conch")
+
         case "config":
             print(OmegaConf.to_yaml(cfg, resolve=True))
 
@@ -176,8 +185,10 @@ def run_cli(args: argparse.Namespace):
                 model_path = f"{os.environ['STAMP_RESOURCES_DIR']}/uni/vit_large_patch16_224.dinov2.uni_mass100k/pytorch_model.bin"
             elif feat_extractor == 'dinov2':
                 model_path = f"{os.environ['STAMP_RESOURCES_DIR']}/dinov2/models--facebook--dinov2-large/snapshots/47b73eefe95e8d44ec3623f8890bd894b6ea2d6c/model.safetensors"
+            elif c.feat_extractor == 'conch':
+                model_path = f"{os.environ['STAMP_RESOURCES_DIR']}/conch/models--MahmoodLab--conch/snapshots/f9ca9f877171a28ade80228fb195ac5d79003357/pytorch_model.bin"
             else:
-                raise ValueError(f"Unknown feature extractor `{feat_extractor}`. Must be either `ctp`, `uni` or `dinov2`")
+                raise ValueError(f"Unknown feature extractor `{feat_extractor}`. Must be either `ctp`, `uni`, `dinov2` or `conch`")
             if not Path(model_path).exists():
                 raise ConfigurationError(f"Feature extractor model {model_path} does not exist, please run `stamp setup` to download it.")
             from .preprocessing.slide_preprocessing import preprocess
