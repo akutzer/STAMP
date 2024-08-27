@@ -3,7 +3,6 @@ import json
 import os
 from pathlib import Path
 from typing import Tuple, Union, List
-import types 
 
 import h5py
 import numpy as np
@@ -15,11 +14,11 @@ from torchvision.transforms import ToTensor, Normalize
 from transformers import AutoImageProcessor, Dinov2Model
 
 import uni
-from conch.open_clip_custom import create_model_from_pretrained
+from conch.open_clip_custom import create_model_from_pretrained, CoCa
 from stamp.preprocessing.extractor.swin_transformer import swin_tiny_patch4_window7_224, ConvStem
 
 
-__version__ = "1.2.0_19-08-2024"
+__version__ = "1.2.1_27-08-2024"
 
 
 def get_digest(file: str):
@@ -34,25 +33,25 @@ def get_digest(file: str):
 
 
 class FeatureExtractor:
-    """Extracts features from slide tiles."""
-
-    def __init__(self, model: str, model_name: str, transform = None, device: str = "cpu"):
+    """Extracts features from slide tiles.
+    Supports `CTransPath`, `UNI`, `DINOv2` and `CONCH` as possible feature extractors
+    using different pretrained models.
+    """
+    def __init__(self, model: nn.Module, model_name: str, transform=None, device: str = "cpu"):
         self.model_name = model_name
-        self.model_type = "CTransPath"
         self.name = f"STAMP-extract-{__version__}_{model_name}"
 
-        self.model = model
-        self.model.to(device)
+        self.device = torch.device(device)
+        self.model = model.to(self.device)
         self.model.eval()
         self.transform = transform
 
-        self.device = torch.device(device)
-        if device.type == "cuda":
+        if self.device.type == "cuda":
             # allow for usage of TensorFloat32 as internal dtype for matmul on modern NVIDIA GPUs
             torch.set_float32_matmul_precision("high")
-        self.dtype = next(self.model.parameters()).dtype
 
-        self.mean, self.std = self._extract_mean_std(transform, self.dtype, self.device)
+        self.dtype = next(self.model.parameters()).dtype
+        self.mean, self.std = self._extract_mean_std(self.transform, self.dtype, self.device)
 
         # with torch.no_grad():
             # model = torch.jit.trace(model, torch.randn(1, 3, 224, 224, dtype=self.dtype, device=self.device))
@@ -60,10 +59,10 @@ class FeatureExtractor:
 
     @classmethod
     def init_ctranspath(cls, checkpoint_path: str, device: str) -> "FeatureExtractor":
-        # loading the checkpoint weights
         digest = get_digest(checkpoint_path)
         assert digest == "7c998680060c8743551a412583fac689db43cec07053b72dfec6dcd810113539"
 
+        # loading the checkpoint weights
         model_name = f"xiyuewang-ctranspath-{digest[:8]}"
         ctranspath_weights = torch.load(checkpoint_path, map_location=torch.device("cpu"), weights_only=True)
 
@@ -75,7 +74,7 @@ class FeatureExtractor:
         transform = transforms.Compose([
             transforms.ToImage(),  # convert to tensor, only needed for PIL images
             transforms.ToDtype(torch.uint8, scale=True),  # optional, most input are already uint8 at this point
-            transforms.Resize(size=(224, 224), antialias=True),
+            transforms.Resize(size=(224, 224), antialias=True),  # resize image so that the smaller edge has length `size`
             transforms.ToDtype(torch.float32, scale=True),  # normalize expects float input
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]), # ImageNet normalization
         ])
@@ -134,15 +133,14 @@ class FeatureExtractor:
         digest = get_digest(model_path)
         model_name = f"facebook-dinov2-{digest[:8]}"
 
-        # initializing the model and updating the weights
-
         class Dinov2(Dinov2Model):
+            """Wrapper class for `Dinov2Model` which only returns the `pooler_output`"""
             def forward(self, *args, **kwargs):
                 out = super().forward(*args, **kwargs)
                 return out.pooler_output
         
+        # initializing the model and updating the weights
         model = Dinov2.from_pretrained(model_path.parent)
-
         processor = AutoImageProcessor.from_pretrained(model_path.parent)
         mean, std = processor.image_mean, processor.image_std
         size = (processor.crop_size["height"], processor.crop_size["width"])
@@ -178,20 +176,37 @@ class FeatureExtractor:
         digest = get_digest(model_path)
         model_name = f"mahmood-conch-{digest[:8]}"
 
+        class CONCH(nn.Module):
+            """Wrapper class for `CoCa` which only returns image embeddings"""
+            def __init__(self, coca: CoCa):
+                super().__init__()
+                self.visual = coca.visual
+
+            def forward(self, *args, **kwargs) -> torch.Tensor:
+                out = self.visual.forward_no_head(*args, **kwargs, normalize=False)
+                return out
+    
         # initializing the model and updating the weights
         model, transform = create_model_from_pretrained("conch_ViT-B-16", checkpoint_path=str(model_path))
+        model = CONCH(model)
+
         # CONCH implementations still uses transformsV1, which expects
         # either a PILImage or Tensor as input, not a numpy array like in the current code,
-        # thus we have to move the ToTensor transform to the beginning 
+        # thus we have to move the ToTensor transform to the beginning.
         # Additionally, this filters out the "_convert_to_rgb" function
-        transform.transforms = list(filter(lambda x: not isinstance(x, (ToTensor, types.FunctionType)), transform.transforms))
-        transform.transforms.insert(0, ToTensor())
-        print(model)
-        print(transform)
-        exit(0)
+        # transform.transforms = list(filter(lambda x: not isinstance(x, (ToTensor, types.FunctionType)), transform.transforms))
+        # transform.transforms.insert(0, ToTensor())
+        transform = transforms.Compose([
+            transforms.ToImage(),  # convert to tensor, only needed for PIL images
+            transforms.ToDtype(torch.uint8, scale=True),  # optional, most input are already uint8 at this point
+            transforms.Resize(size=224, antialias=True),
+            transforms.CenterCrop(size=(224, 224)),
+            transforms.ToDtype(torch.float32, scale=True),  # normalize expects float input
+            transforms.Normalize(mean=(0.48145466, 0.4578275, 0.40821073), std=(0.26862954, 0.26130258, 0.27577711)),
+        ])
 
         extractor = cls(model, model_name, transform, device)
-        print("UNI model successfully initialized...\n")
+        print("CONCH model successfully initialized...\n")
 
         return extractor
 
