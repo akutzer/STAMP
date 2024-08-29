@@ -21,6 +21,7 @@ from .helpers.exceptions import MPPExtractionError
 from .helpers.chunk_loaders import AsyncChunkLoader, JPEGChunkLoader, view_as_tiles
 from .helpers.memmap_image import AsyncMemmapImage
 from .helpers.background_rejection import filter_background
+from .classifier.model import HistoClassifier
 
 
 Image.MAX_IMAGE_PIXELS = None
@@ -58,7 +59,7 @@ def check_write_permissions(directory: Path) -> None:
 
 
 def preprocess(
-    wsi_dir: Path, output_dir: Path, model_path: Path, cache_dir: Path,
+    wsi_dir: Path, output_dir: Path, model_path: Path, cache_dir: Path, classifier_path: Path = None,
     feature_extractor: str = "ctp", device: str = "cuda", batch_size: int = 64,
     target_microns: int = 256, tile_size: int = 224, cores: int = 4,
     normalize: bool = False, normalization_template: Optional[Path] = None,
@@ -91,6 +92,8 @@ def preprocess(
     else:
         raise ValueError(f"Unknown feature extractor `{feature_extractor}`. Must be either `ctp`, `uni`, `dinov2` or `conch`")
 
+    if use_classifier := (classifier_path is not None and classifier_path.exists()):
+        tissue_classifier = HistoClassifier.from_pretrained(classifier_path, device=device)
 
     # Create cache and output directories
     if cache:
@@ -223,13 +226,13 @@ def preprocess(
             
             try:
                 slide_size = (chunk_loader.height, chunk_loader.width)
-                embeddings, coords = [], []
+                embeddings, tile_classes, coords = [], [], []
 
-                if generate_cache := (cache and not slide_jpg.exists()):
+                # if generate_cache := (cache and not slide_jpg.exists()):
+                if generate_cache := cache:
                     canny_img = AsyncMemmapImage(shape=(*slide_size, 3), max_workers=max_workers)
 
                 total_rejected, total_tiles = 0, 0
-                # tile_buffer, tile_buffer_size = [], 0
                 for chunk, position in tqdm(chunk_loader, leave=False):
                     # `chunk`: 3D numpy array of shape (chunk_height, chunk_width, 3) representing the current chunk of the WSI
                     # `position`: (row, column) tuple representing the position of the top-left corner of a chunk
@@ -257,20 +260,12 @@ def preprocess(
                     
                     if generate_cache:
                         canny_img.write_tiles(tiles, tile_coords, use_threading=True)
-                    
 
                     coords.append(tile_coords)
                     embeddings.append(extractor.single_extract(tiles))
-
-                    # tile_buffer_size += tiles.shape[0]
-                    # tile_buffer.append(tiles)
-                    # if tile_buffer_size > 1024:
-                    #     embeddings.append(extractor.extract(tile_buffer, cores=2, batch_size=batch_size))
-                    #     tile_buffer, tile_buffer_size = [], 0
-
-                # if len(tile_buffer) > 0:
-                #     embeddings.append(extractor.extract(tile_buffer, cores=2, batch_size=batch_size))
-                #     tile_buffer, tile_buffer_size = [], 0
+                    if use_classifier:
+                        tile_classes.append(tissue_classifier.predict_tiles(tiles))
+                        # tile_classes.append(tissue_classifier.predict_patches(tiles))
 
             except MPPExtractionError:
                 if delete_slide:
@@ -294,6 +289,8 @@ def preprocess(
         
             embeddings = np.concatenate(embeddings, axis=0)
             coords = np.concatenate(coords, axis=0)
+            if use_classifier:
+                tile_classes = np.concatenate(tile_classes, axis=0)
 
             if embeddings.shape[0] > 0:
                 # Order embeddings row and then column-wise
@@ -301,8 +298,16 @@ def preprocess(
                 idx = coords[:, 0] * max_width + coords[:, 1]
                 sort_indices = np.argsort(idx)
                 embeddings, coords = embeddings[sort_indices], coords[sort_indices]
+                if use_classifier:
+                    tile_classes = tile_classes[sort_indices]
 
-                store_features(feature_output_path, embeddings, coords, extractor.name)
+                if use_classifier:
+                    store_features(
+                        feature_output_path, embeddings, coords, extractor.name,
+                        tile_cls=tile_classes, id2class=tissue_classifier.config.categories
+                    )
+                else: 
+                    store_features(feature_output_path, embeddings, coords, extractor.name)
                 num_processed += 1
             else:
                 logging.warning("No tiles remain for feature extraction after preprocessing. Skipping...")
@@ -311,6 +316,11 @@ def preprocess(
             try:
                 if generate_cache:
                     canny_img.save(slide_cache_dir / "canny_slide.jpg")
+                    if use_classifier:
+                        canny_img.save_with_boundaries(
+                            slide_cache_dir / "canny_slide_tiles.jpg",
+                            coords, tile_classes
+                        )
                     canny_img.close()
                     del canny_img
             except Exception as e:

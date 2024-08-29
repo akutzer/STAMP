@@ -4,7 +4,7 @@ from typing import Tuple, Optional, Union
 from concurrent.futures import ThreadPoolExecutor
 import threading
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 
 
 Image.MAX_IMAGE_PIXELS = None
@@ -90,6 +90,48 @@ class AsyncMemmapImage:
             raise ValueError("Unsupported shape for image conversion. Must be 2D or 3D with 1 or 3 channels.")
         
         image = Image.fromarray(image_data)
+        image.save(output_path)
+    
+    def save_with_boundaries(
+            self, output_path: Union[Path, str], coords: np.ndarray,
+            tile_classes: np.ndarray = None
+        ) -> None:
+        """
+        Save the entire memmap data as an image file.
+
+        Parameters:
+            output_path (Union[Path, str]): Path where the image file will be saved.
+        """
+        # Ensure all threads complete before saving the image
+        self.executor.shutdown(wait=True)
+
+        if len(self.shape) == 3 and self.shape[2] == 3:  # RGB data
+            image_data = self.memmap.astype('uint8')
+        elif len(self.shape) == 2 or (len(self.shape) == 3 and self.shape[2] == 1):  # Grayscale data
+            image_data = self.memmap.squeeze().astype('uint8')
+        else:
+            raise ValueError("Unsupported shape for image conversion. Must be 2D or 3D with 1 or 3 channels.")
+        
+        # calculate tile size
+        tile_size = (224, 224)  # (h, w)
+
+        image = Image.fromarray(image_data)
+        draw = ImageDraw.Draw(image)
+
+        # draw tile boundaries
+        for coord, tile_class in zip(coords, tile_classes):
+            # draw tile box (x0, y0, x1, y1)
+            rect = tuple(coord)[::-1] + tuple(coord + tile_size)[::-1]
+            draw.rectangle(rect, outline="black", width=2, fill=None)
+
+            # write tissue type in the top left corner and add some backdrop
+            cls_name, cls_id, prob = tile_class[0]
+            text = f"{cls_name} ({cls_id}, {str(round(prob, 2))})"
+            font = ImageFont.load_default(14).font
+            text_pos = tuple(coord + (3, 3))[::-1]
+            draw.rectangle([text_pos, tuple(text_pos + (1.05, 1.2) * np.array(font.getsize(text)[0]))], fill=(0, 0, 0, 160))
+            draw.text(text_pos, text, anchor="lt", fill="white", font_size=14, stroke_width=0)
+
         image.save(output_path)
 
     def close(self) -> None:

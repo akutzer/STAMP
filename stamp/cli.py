@@ -189,14 +189,17 @@ def run_cli(args: argparse.Namespace):
                 model_path = f"{os.environ['STAMP_RESOURCES_DIR']}/conch/models--MahmoodLab--conch/snapshots/f9ca9f877171a28ade80228fb195ac5d79003357/pytorch_model.bin"
             else:
                 raise ValueError(f"Unknown feature extractor `{feat_extractor}`. Must be either `ctp`, `uni`, `dinov2` or `conch`")
+            
             if not Path(model_path).exists():
                 raise ConfigurationError(f"Feature extractor model {model_path} does not exist, please run `stamp setup` to download it.")
+            
             from .preprocessing.wsi_preprocessing import preprocess
             preprocess(
                 wsi_dir=Path(c.wsi_dir),
                 output_dir=Path(c.output_dir),
                 model_path=Path(model_path),
                 cache_dir=Path(c.cache_dir),
+                classifier_path=Path(c.classifier_path) if ('classifier_path' in c and c.classifier_path is not None) else None,
                 feature_extractor=feat_extractor,
                 device=c.device,
                 batch_size = c.batch_size if 'batch_size' in c else 64,
@@ -220,6 +223,7 @@ def run_cli(args: argparse.Namespace):
                 paths_to_check=["clini_table", "slide_table", "feature_dir"]
             )
             c = cfg.modeling
+
             from .modeling.marugoto.transformer.helpers import train_categorical_model_
             train_categorical_model_(clini_table=Path(c.clini_table), 
                                      slide_table=Path(c.slide_table),
@@ -238,6 +242,7 @@ def run_cli(args: argparse.Namespace):
                 paths_to_check=["clini_table", "slide_table", "feature_dir"]
             )
             c = cfg.modeling
+
             from .modeling.marugoto.transformer.helpers import categorical_crossval_
             categorical_crossval_(clini_table=Path(c.clini_table), 
                                   slide_table=Path(c.slide_table),
@@ -257,6 +262,7 @@ def run_cli(args: argparse.Namespace):
                 paths_to_check=["clini_table", "slide_table", "deploy_feature_dir"]
             )
             c = cfg.modeling
+
             from .modeling.marugoto.transformer.helpers import deploy_categorical_model_
             deploy_categorical_model_(clini_table=Path(c.clini_table),
                                       slide_table=Path(c.slide_table),
@@ -275,8 +281,9 @@ def run_cli(args: argparse.Namespace):
                 prefix="modeling.statistics",
                 paths_to_check=["pred_csvs"]
             )
-            from .modeling.statistics import compute_stats
             c = cfg.modeling.statistics
+
+            from .modeling.statistics import compute_stats
             if isinstance(c.pred_csvs,str):
                 c.pred_csvs = [c.pred_csvs]
             compute_stats(pred_csvs=[Path(x) for x in c.pred_csvs],
@@ -293,6 +300,7 @@ def run_cli(args: argparse.Namespace):
                 paths_to_check=["feature_dir","wsi_dir","model_path"]
             )
             c = cfg.heatmaps
+            
             from .heatmaps.__main__ import main
             main(slide_name=str(c.slide_name),
                  feature_dir=Path(c.feature_dir),

@@ -292,7 +292,8 @@ def store_metadata(
 
 
 def store_features(
-    outdir: Path, features: np.ndarray, tiles_coords: np.ndarray, extractor_name: str
+    outdir: Path, features: np.ndarray, tiles_coords: np.ndarray, extractor_name: str,
+    tile_cls: np.ndarray = None, id2class: list = None
 ):
     with h5py.File(f"{outdir}.h5", "w") as f:
         f["coords"] = tiles_coords[:, ::-1]  # store as (w, h) not (h, w) for backwards compatibility
@@ -300,6 +301,10 @@ def store_features(
         f["augmented"] = np.repeat([False, True], [features.shape[0], 0])
         assert len(f["feats"]) == len(f["augmented"])
         f.attrs["extractor"] = extractor_name
+        if tile_cls is not None:
+            assert id2class is not None
+            f["classes"] = tile_cls[["id", "probability"]]
+            f["id2class"] = id2class
 
 
 class SlideTileDataset(Dataset):
