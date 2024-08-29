@@ -191,7 +191,7 @@ def run_cli(args: argparse.Namespace):
                 raise ValueError(f"Unknown feature extractor `{feat_extractor}`. Must be either `ctp`, `uni`, `dinov2` or `conch`")
             if not Path(model_path).exists():
                 raise ConfigurationError(f"Feature extractor model {model_path} does not exist, please run `stamp setup` to download it.")
-            from .preprocessing.slide_preprocessing import preprocess
+            from .preprocessing.wsi_preprocessing import preprocess
             preprocess(
                 wsi_dir=Path(c.wsi_dir),
                 output_dir=Path(c.output_dir),

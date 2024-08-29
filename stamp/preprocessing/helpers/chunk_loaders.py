@@ -73,7 +73,7 @@ def view_as_tiles(
         position (Tuple[int, int]): The (row, column) position of the top-left corner of the chunk.
 
     Returns:
-        Tuple[np.ndarray, np.ndarray]: Array of tiles and their respective positions in the original image.
+        Tuple[np.ndarray, np.ndarray]: Array of tiles and their respective (row, column) positions in the original image.
     """
     h, w, c = chunk.shape
     tile_h, tile_w = tile_size
@@ -84,7 +84,6 @@ def view_as_tiles(
     n_tiles_h = h // tile_h
     n_tiles_w = w // tile_w
     
-
     tiles = chunk.reshape(n_tiles_h, tile_h, n_tiles_w, tile_w, c)
     tiles = tiles.transpose(0, 2, 1, 3, 4)
     tiles = tiles.reshape(-1, tile_h, tile_w, c)
@@ -154,7 +153,7 @@ class AsyncChunkLoader:
                 target_size = (self._target_chunk_size, self._target_chunk_size)
                 transform_position = (w * self._target_chunk_size, h * self._target_chunk_size)
                 future = self.executor.submit(self.load_chunk, self.slide, position, size, target_size)
-                self.future_to_pos[future] = transform_position[::-1]
+                self.future_to_pos[future] = transform_position[::-1]  # (w, h) -> (h, w)
         return self
 
     def __len__(self) -> int:
@@ -229,9 +228,7 @@ class JPEGChunkLoader:
         if self.current_chunk >= self.length:
             raise StopIteration
         
-        h = self.current_chunk // self._chunks[0]
-        w = self.current_chunk % self._chunks[0]
-        
+        h, w = divmod(self.current_chunk, self._chunks[0])        
         position = (w * self.chunk_size, h * self.chunk_size)
         size = (self.chunk_size, self.chunk_size)
         
@@ -240,4 +237,4 @@ class JPEGChunkLoader:
         
         self.current_chunk += 1
         
-        return chunk_array, position[::-1]
+        return chunk_array, position[::-1]  # (w, h) -> (h, w)

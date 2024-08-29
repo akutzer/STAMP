@@ -254,7 +254,7 @@ class FeatureExtractor:
 
         tiles = tiles.permute(0, 3, 1, 2)  # (N, H, W, C) -> (N, C, H, W)
 
-        with torch.inference_mode():
+        with torch.inference_mode(): # todo: try autocast
             features = self.model(tiles).half().cpu().numpy()
         
         return features
@@ -328,4 +328,3 @@ class SlideTileDataset(Dataset):
             image = self.transform(image)
 
         return image
-
