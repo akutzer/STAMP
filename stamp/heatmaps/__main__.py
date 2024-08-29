@@ -47,6 +47,39 @@ def gradcam_per_category(
     gradcam = (feats_batch * feats_batch.grad).mean(-1).abs()
     return preds, gradcam
 
+def gradcam_for_survival(
+    learn: Learner, feats: Tensor, 
+    output_index: int = 0  # 通常生存分析模型只有一个输出
+) -> tuple[Tensor, Tensor]:
+    """
+    This function computes the Grad-CAM for a survival prediction model where the output is a single continuous variable.
+
+    Args:
+    learn (Learner): The learner object containing the survival prediction model.
+    feats (Tensor): The input features tensor.
+    output_index (int): The index of the output for which to compute the Grad-CAM, default is 0 for survival models.
+
+    Returns:
+    tuple[Tensor, Tensor]: A tuple containing the predictions and their corresponding Grad-CAMs.
+    """
+    feats_batch = feats.unsqueeze(0).detach()  # Add a batch dimension and detach from the current graph
+    feats_batch.requires_grad = True  # Enable gradient tracking for input
+    
+    preds = learn.model(feats_batch)  # Get model predictions as continuous scores
+    if preds.grad_fn is None:
+        raise ValueError("Ensure the model's output has gradients.")
+
+    # Select the output at the specified index if there are multiple outputs
+    target_output = preds[:, output_index] if preds.ndim > 1 else preds
+    target_output.backward()  # Compute gradients with respect to the selected output
+
+    grad = feats_batch.grad  # Get gradients for the input features
+    weights = grad.mean(dim=[2, 3], keepdim=True)  # Global average pooling of gradients across the spatial dimensions (H and W)
+    gradcam = (weights * feats_batch).sum(dim=1).clamp(min=0)  # Weighted combination of forward activation maps
+
+    return preds, gradcam
+
+
 
 def vals_to_im(
     scores: Float[Tensor, "n_tiles *d_feats"],

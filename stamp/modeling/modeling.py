@@ -18,7 +18,8 @@ def main():
 
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--one_model", action="store_true", help="Run full training instead of cross-validation")
-    group.add_argument("--deploy_model", type=Path, help="Path to the model .pkl to deploy")
+    #group.add_argument("--deploy_model", type=Path, help="Path to the model .pkl to deploy")
+    parser.add_argument("--deploy_models", nargs="+", type=Path, help="Paths to model files")
     group.add_argument("--n_splits", type=int, default=5, help="Number of splits")
     
     args = parser.parse_args()
@@ -33,12 +34,12 @@ def main():
                                  cat_labels=args.cat_labels,
                                  cont_labels=args.cont_labels, 
                                  categories=args.categories)
-    elif args.deploy_model:
+    elif args.deploy_models:
         #deploy 1 model on data
         deploy_categorical_model_(clini_table=args.clini_table,
                                   slide_table=args.slide_table,
                                   feature_dir=args.feature_dir,
-                                  model_path=args.deploy_model,
+                                  model_paths=args.deploy_models,
                                   output_path=args.output_path,
                                   target_label=args.target_label,
                                   cat_labels=args.cat_labels,

@@ -198,7 +198,7 @@ def run_cli(args: argparse.Namespace):
         case "crossval":
             require_configs(
                 cfg,
-                ["clini_table", "slide_table", "output_dir", "feature_dir", "target_label", "cat_labels", "cont_labels", "n_splits", "method", "num_bins", "aggregation"], # this one requires the n_splits key!
+                ["clini_table", "slide_table", "output_dir", "feature_dir", "target_label", "cat_labels", "cont_labels", "n_splits", "method", "num_bins", "aggregation", "extra_data"], # this one requires the n_splits key!
                 prefix="modeling",
                 paths_to_check=["clini_table", "slide_table", "feature_dir"]
             )
@@ -215,16 +215,19 @@ def run_cli(args: argparse.Namespace):
                                   n_splits=c.n_splits,
                                   method=c.method,
                                   num_bins=c.num_bins,
-                                  aggregation=c.aggregation.lower())
+                                  aggregation=c.aggregation.lower(),
+                                  extra_data=c.extra_data)
         case "deploy":
             require_configs(
                 cfg,
-                ["output_dir", "deploy_feature_dir", "model_path"], # this one requires the model_path key!
+                ["output_dir", "deploy_feature_dir", "model_paths"], # this one requires the model_path key!
                 prefix="modeling",
                 paths_to_check=["deploy_feature_dir"]
             )
             c = cfg.modeling
             from .modeling.marugoto.transformer.helpers import deploy_categorical_model_
+            if isinstance(c.model_paths,str):
+                c.model_paths = [c.model_paths]
             deploy_categorical_model_(clini_table=Path(c.clini_table) if 'clini_table' in c and isinstance(c.clini_table, str) else None,
                                       slide_table=Path(c.slide_table) if 'slide_table' in c and isinstance(c.slide_table, str) else None,
                                       feature_dir=Path(c.deploy_feature_dir),
@@ -232,39 +235,60 @@ def run_cli(args: argparse.Namespace):
                                       target_label=c.target_label if 'target_label' in c else None,
                                       cat_labels=c.cat_labels if 'cat_labels' in c else None,
                                       cont_labels=c.cont_labels if 'cont_labels' in c else None,
-                                      model_path=Path(c.model_path))
+                                      model_paths=[Path(p) for p in c.model_paths]) #Path(c.model_path))
             print("Successfully deployed models")
         case "statistics":
             require_configs(
                 cfg,
-                ["pred_csvs", "method", "output_dir"],
+                ["pred_csvs", "method", "output_dir", "csv_file"],
                 prefix="modeling.statistics",
-                paths_to_check=["pred_csvs"]
+                paths_to_check=["pred_csvs", "csv_file"]
             )
-            from .modeling.statistics import compute_stats
+            from .modeling.statistics import compute_stats, visualize_results, KM_plot
             c = cfg.modeling.statistics
             if isinstance(c.pred_csvs,str):
                 c.pred_csvs = [c.pred_csvs]
-            compute_stats(pred_csvs=[Path(x) for x in c.pred_csvs],
-                          output_dir=Path(c.output_dir),
-                          method=c.method)
+            # compute_stats(pred_csvs=[Path(x) for x in c.pred_csvs],
+            #               output_dir=Path(c.output_dir),
+            #               method=c.method)
+            #visualize_results(csv_files=[Path(x) for x in c.pred_csvs],output_dir=Path(c.output_dir))
+            KM_plot(Path(c.output_dir), 
+                    c.csv_file, 
+                    'follow_up_years', 
+                    'event', 
+                    'group')
             print("Successfully calculated statistics")
         case "heatmaps":
+            # require_configs(
+            #     cfg,
+            #     ["feature_dir","wsi_dir","model_path","output_dir", "n_toptiles", "overview"], 
+            #     prefix="heatmaps",
+            #     paths_to_check=["feature_dir","wsi_dir","model_path"]
+            # )
+            # c = cfg.heatmaps
+            # from .heatmaps.__main__ import main
+            # main(slide_name=str(c.slide_name),
+            #      feature_dir=Path(c.feature_dir),
+            #      wsi_dir=Path(c.wsi_dir),
+            #      model_path=Path(c.model_path),
+            #      output_dir=Path(c.output_dir),
+            #      n_toptiles=int(c.n_toptiles),
+            #      overview=c.overview)
+            # print("Successfully produced heatmaps")
+
             require_configs(
                 cfg,
-                ["feature_dir","wsi_dir","model_path","output_dir", "n_toptiles", "overview"], 
+                ["out_dir","train_dir","ws_path","h5_feature_dir"], 
                 prefix="heatmaps",
-                paths_to_check=["feature_dir","wsi_dir","model_path"]
+                paths_to_check=["out_dir","train_dir","ws_path", "h5_feature_dir"]
             )
             c = cfg.heatmaps
-            from .heatmaps.__main__ import main
-            main(slide_name=str(c.slide_name),
-                 feature_dir=Path(c.feature_dir),
-                 wsi_dir=Path(c.wsi_dir),
-                 model_path=Path(c.model_path),
-                 output_dir=Path(c.output_dir),
-                 n_toptiles=int(c.n_toptiles),
-                 overview=c.overview)
+            from .heatmaps.heatmaps import plot_heatmaps_
+            plot_heatmaps_(out_dir=Path(c.out_dir),
+                           train_dir=Path(c.train_dir),
+                           ws_path=Path(c.ws_path),
+                           h5_feature_dir=Path(c.h5_feature_dir)
+                           )
             print("Successfully produced heatmaps")
         case _:
             raise ConfigurationError(f"Unknown command {args.command}")

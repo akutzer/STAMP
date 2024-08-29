@@ -2,7 +2,7 @@ from datetime import datetime
 import json
 import os
 from pathlib import Path
-from typing import Iterable, Optional, Sequence, Union
+from typing import Iterable, Optional, Sequence, Union, List
 
 import numpy as np
 import pandas as pd
@@ -170,7 +170,7 @@ def deploy_categorical_model_(
     clini_table: PathLike,
     slide_table: PathLike,
     feature_dir: PathLike,
-    model_path: PathLike,
+    model_paths: List[PathLike], # a list of model paths
     output_path: PathLike,
     *,
     target_label: Optional[str] = None,
@@ -195,19 +195,7 @@ def deploy_categorical_model_(
     use_cpu = (device.type == "cpu")
     
     feature_dir = Path(feature_dir)
-    model_path = Path(model_path)
     output_path = Path(output_path)
-    if (preds_csv := output_path/'patient-preds.csv').exists():
-        print(f'{preds_csv} already exists!  Skipping...')
-        return
-
-    learn = safe_load_learner(model_path, use_cpu=use_cpu)
-    target_enc = get_target_enc(learn)
-    categories = target_enc.categories_[0]
-
-    target_label = target_label or learn.target_label
-    cat_labels = cat_labels or learn.cat_labels
-    cont_labels = cont_labels or learn.cont_labels
 
     if clini_table is None and slide_table is None:
         h5s = set(feature_dir.glob('*.h5'))
@@ -218,16 +206,49 @@ def deploy_categorical_model_(
     else:
         test_df = get_cohort_df(clini_table, slide_table, feature_dir, target_label, categories)
 
-    patient_preds_df = real_deploy(test_df=test_df, learn=learn, target_label=target_label, device=device)
-    output_path.mkdir(parents=True, exist_ok=True)
-    patient_preds_df.to_csv(preds_csv, index=False)
+    test_df = test_df.sort_values(by='FILENAME').reset_index(drop=True)
+    # Dictionary to store risks from all models
+    risks = {filename: [] for filename in test_df['FILENAME']}
+    print('risks:', risks)
+    for model_path in model_paths:
+        model_path = Path(model_path)
+        if len(model_path.parts) > 1:
+            model_name = model_path.parts[-2]
+        else:
+            model_name = model_path.stem 
+        preds_csv = output_path / (model_name + '-patient-preds.csv')
+        print('preds_csv:', preds_csv)
+        if preds_csv.exists():
+            print(f'{preds_csv} already exists! Skipping...')
+            continue
+
+        learn = safe_load_learner(model_path, use_cpu=use_cpu)
+        target_enc = get_target_enc(learn)
+        categories = target_enc.categories_[0]
+
+        target_label = target_label or learn.target_label
+        cat_labels = cat_labels or learn.cat_labels
+        cont_labels = cont_labels or learn.cont_labels
+
+        patient_preds_df = real_deploy(test_df=test_df, learn=learn, target_label=target_label, device=device)
+        patient_preds_df.to_csv(preds_csv, index=False) 
+
+        # Append risks for each patient
+        for index, row in patient_preds_df.iterrows():
+            risks[row['FILENAME']].append(-row['relative_risk'])
+    
+    # Calculate average risk
+    avg_risks = {k: sum(v) / len(v) for k, v in risks.items()}
+
+    if len(avg_risks) > 1:
+        overall_risks = list(avg_risks.values())
+    else:
+        overall_risks = list(avg_risks.values())[0] 
 
     with open(output_path / "overall-survival-years.json", 'w') as f:
-        risks = -patient_preds_df["relative_risk"].values
-        if risks.size > 1:
-            f.write(json.dumps(risks.tolist(), indent=4))
-        else:
-            f.write(json.dumps(risks.item(), indent=4))
+        f.write(json.dumps(overall_risks, indent=4))
+
+    print("Deployment and output generation complete.")
 
 
 
@@ -241,7 +262,8 @@ def categorical_crossval_(
     n_splits: int = 5,
     categories: Optional[Iterable[str]] = None,
     num_bins: Optional[int] = None,
-    aggregation: str = "trans_mil"
+    aggregation: str = "trans_mil",
+    extra_data: bool = False
 ) -> None:
     """Performs a cross-validation for a categorical target.
 
@@ -279,6 +301,7 @@ def categorical_crossval_(
         'datetime': datetime.now().astimezone().isoformat()}
 
     df, categories = get_cohort_df(clini_table, slide_table, feature_dir, target_label, categories)
+
     info['categories'] = list(categories)
 
     time_label, event_label = target_label
@@ -294,15 +317,22 @@ def categorical_crossval_(
     if (fold_path := output_path/'folds.pt').exists():
         folds = torch.load(fold_path)
     else:
+        if extra_data:
+            extra_df = df[df['source'] == 'extra']
+            main_df = df[df['source'] != 'extra']
+        else:
+            main_df = df
+        main_df = main_df.reset_index(drop=True)
+        #added shuffling with seed 1337
         skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=1337)
-        patient_df = df.groupby('PATIENT').first().reset_index()
+        patient_df = main_df.groupby('PATIENT').first().reset_index()
         event_label = target_label[1]
         folds = tuple(skf.split(patient_df.PATIENT, patient_df[event_label]))
         torch.save(folds, fold_path)
 
     info['folds'] = [
         {
-            part: list(df.PATIENT[folds[fold][i]])
+            part: list(main_df.PATIENT[folds[fold][i]])
             for i, part in enumerate(['train', 'test'])
         }
         for fold in range(n_splits) ]
@@ -319,15 +349,22 @@ def categorical_crossval_(
         elif (fold_path/'export.pkl').exists():
             learn = safe_load_learner(fold_path/'export.pkl')
         else:
-            fold_train_df = df.iloc[train_idxs]
-            learn = _crossval_train(
-                fold_path=fold_path, fold_df=fold_train_df, fold=fold, info=info,
-                target_label=target_label, target_enc=target_enc,
-                cat_labels=cat_labels, cont_labels=cont_labels, method=method,
-                aggregation=aggregation)
+            fold_train_df = main_df.iloc[train_idxs]
+            if extra_data:
+                learn = _crossval_train(
+                    fold_path=fold_path, fold_df=fold_train_df, fold=fold, info=info,
+                    target_label=target_label, target_enc=target_enc,
+                    cat_labels=cat_labels, cont_labels=cont_labels, method=method,
+                    aggregation=aggregation, extra_data=extra_data, extra_df=extra_df)
+            else:
+                learn = _crossval_train(
+                    fold_path=fold_path, fold_df=fold_train_df, fold=fold, info=info,
+                    target_label=target_label, target_enc=target_enc,
+                    cat_labels=cat_labels, cont_labels=cont_labels, method=method,
+                    aggregation=aggregation, extra_data=extra_data)
             learn.export()
 
-        fold_test_df = df.iloc[test_idxs]
+        fold_test_df = main_df.iloc[test_idxs]
         fold_test_df.drop(columns='slide_path').to_csv(fold_path/'test.csv', index=False)
         patient_preds_df = deploy(
             test_df=fold_test_df, learn=learn,
@@ -337,7 +374,7 @@ def categorical_crossval_(
 
 
 def _crossval_train(
-    *, fold_path, fold_df, fold, info, target_label, target_enc, cat_labels, cont_labels, method, aggregation
+    *, fold_path, fold_df, fold, info, target_label, target_enc, cat_labels, cont_labels, method, aggregation, extra_data, extra_df=None
 ):
     """Helper function for training the folds."""
     assert fold_df.PATIENT.nunique() == len(fold_df)
@@ -349,6 +386,9 @@ def _crossval_train(
     )
     train_df = fold_df[fold_df.PATIENT.isin(train_patients)]
     valid_df = fold_df[fold_df.PATIENT.isin(valid_patients)]
+    # If extra data is to be included, it should be added here before any further processing
+    if extra_data:
+        train_df = pd.concat([train_df, extra_df]).reset_index(drop=True)
     train_df.drop(columns='slide_path').to_csv(fold_path/'train.csv', index=False)
     valid_df.drop(columns='slide_path').to_csv(fold_path/'valid.csv', index=False)
 

@@ -65,8 +65,8 @@ def train(
     n_epoch: int = 100,
     patience: int = 10,
     path: Optional[Path] = None,
-    batch_size: int = 100,
-    cores: int = 8,
+    batch_size: int = 32,
+    cores: int = 100,
     plot: bool = True,
     method: str = "cox",
     aggregation: str = "trans_mil"
@@ -185,7 +185,7 @@ def train(
         CSVLogger()
     ]
     # learn.fit_one_cycle(n_epoch=n_epoch, reset_opt=True, lr_max=1e-4, wd=1e-3, cbs=cbs, pct_start=.05)
-    learn.fit(n_epoch=n_epoch, reset_opt=True, lr=5e-5, wd=1e-3, cbs=cbs)
+    learn.fit(n_epoch=n_epoch, reset_opt=True, lr=0.0001, wd=1e-3, cbs=cbs)
     
     # Plot training and validation losses as well as learning rate schedule
     if plot:
