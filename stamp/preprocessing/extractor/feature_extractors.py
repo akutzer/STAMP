@@ -53,9 +53,7 @@ class FeatureExtractor:
         self.dtype = next(self.model.parameters()).dtype
         self.mean, self.std = self._extract_mean_std(self.transform, self.dtype, self.device)
 
-        # with torch.no_grad():
-            # model = torch.jit.trace(model, torch.randn(1, 3, 224, 224, dtype=self.dtype, device=self.device))
-        # model = torch.compile(model)
+        model = torch.compile(model)
 
     @classmethod
     def init_ctranspath(cls, checkpoint_path: str, device: str) -> "FeatureExtractor":
@@ -254,10 +252,10 @@ class FeatureExtractor:
 
         tiles = tiles.permute(0, 3, 1, 2)  # (N, H, W, C) -> (N, C, H, W)
 
-        with torch.inference_mode(): # todo: try autocast
-            features = self.model(tiles).half().cpu().numpy()
+        with torch.inference_mode(), torch.autocast(self.device.type):
+            features = self.model(tiles)
         
-        return features
+        return features.half().cpu().numpy()
 
     @staticmethod
     def _extract_mean_std(transform, dtype=None, device=None):

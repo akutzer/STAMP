@@ -94,6 +94,7 @@ def preprocess(
 
     if use_classifier := (classifier_path is not None and classifier_path.exists()):
         tissue_classifier = HistoClassifier.from_pretrained(classifier_path, device=device)
+        tissue_classifier = torch.compile(tissue_classifier)
 
     # Create cache and output directories
     if cache:

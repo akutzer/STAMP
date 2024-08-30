@@ -124,7 +124,7 @@ class HistoClassifier(nn.Module):
             
         tiles = tiles.permute(0, 3, 1, 2)  # (N, H, W, C) -> (N, C, H, W)
 
-        with torch.inference_mode():
+        with torch.inference_mode(), torch.autocast(self.device.type):
             pred =  self.backbone(tiles)
             if not (self.is_ctranspath or self.is_uni):
                 pred = pred.pooler_output
