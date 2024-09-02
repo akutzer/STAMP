@@ -329,7 +329,7 @@ def preprocess(
 
             logging.info(f"Slide preprocessing completed in {time.time() - start_loading_time:.2f} seconds.")
             if not use_cache:
-                logging.info(f"Reshaped original WSI from {original_slide_size} to {slide_size[::-1]}.")
+                logging.info(f"Reshaped original WSI from {original_slide_size} to {slide_size[::-1]}. (width, height)")
             logging.info(f"Canny edge detection applied for background rejection: {total_rejected}/{total_tiles} tiles rejected.")
             logging.info(f"Successfully embedded {total_tiles - total_rejected} tiles.")
 

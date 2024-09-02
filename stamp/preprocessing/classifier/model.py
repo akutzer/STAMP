@@ -7,6 +7,7 @@ import torch
 from torch import nn
 from torch.utils.data import Dataset, DataLoader
 from transformers import AutoConfig, AutoModel, PretrainedConfig
+import timm
 from tqdm import tqdm
 
 from .data import get_augmentation
@@ -113,9 +114,9 @@ class HistoClassifier(nn.Module):
     def predict_tiles(self, tiles: np.ndarray) -> np.ndarray:
         cache_mode = self.training
         self.train(False)
-        if not hasattr(self, mean):
+        if not hasattr(self, "mean"):
             self.mean = torch.tensor(self.config.mean, dtype=self.dtype, device=self.device)
-        if not hasattr(self, std):
+        if not hasattr(self, "std"):
             self.std = torch.tensor(self.config.std, dtype=self.dtype, device=self.device)
 
         tiles = torch.from_numpy(tiles).to(dtype=self.dtype, device=self.device)
@@ -272,8 +273,15 @@ class HistoClassifier(nn.Module):
         else:
             backbone = AutoModel.from_pretrained(config.backbone)
         model = cls(backbone, config.hidden_dim, config.n_classes, is_ctranspath=config.is_ctranspath, is_uni=config.is_uni)
+
         state_dict = torch.load(model_dir / "model.pt", map_location=torch.device("cpu"), weights_only=True)
+        # state_dict_renamed = state_dict.copy()
+        # for key in state_dict.keys():
+        #     if "._orig_mod" in key:
+        #         new_key = key.replace("._orig_mod", "")
+        #         state_dict_renamed[new_key] = state_dict_renamed.pop(key)
         model.load_state_dict(state_dict)
+
         model.config = config
         model.to(device)
         return model
