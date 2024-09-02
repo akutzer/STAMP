@@ -2,7 +2,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
-from typing import Tuple, Union, List
+from typing import Tuple, Union, List, Optional
 
 import h5py
 import numpy as np
@@ -56,18 +56,21 @@ class FeatureExtractor:
         model = torch.compile(model)
 
     @classmethod
-    def init_ctranspath(cls, checkpoint_path: str, device: str) -> "FeatureExtractor":
-        digest = get_digest(checkpoint_path)
-        assert digest == "7c998680060c8743551a412583fac689db43cec07053b72dfec6dcd810113539"
-
-        # loading the checkpoint weights
-        model_name = f"xiyuewang-ctranspath-{digest[:8]}"
-        ctranspath_weights = torch.load(checkpoint_path, map_location=torch.device("cpu"), weights_only=True)
-
-        # initializing the model and updating the weights
+    def init_ctranspath(cls, checkpoint_path: Optional[str] = None, device: str = "cpu") -> "FeatureExtractor":
+        # initializing the model
         model = swin_tiny_patch4_window7_224(embed_layer=ConvStem, pretrained=False)
         model.head = nn.Identity()
-        model.load_state_dict(ctranspath_weights["model"], strict=True)
+
+        # loading the checkpoint weights and updating the weights
+        if checkpoint_path is not None:  
+            digest = get_digest(checkpoint_path)
+            assert digest == "7c998680060c8743551a412583fac689db43cec07053b72dfec6dcd810113539"
+            weights = torch.load(checkpoint_path, map_location=torch.device("cpu"), weights_only=True)
+            model.load_state_dict(weights["model"], strict=True)
+        else:
+            digest = "7c998680060c8743551a412583fac689db43cec07053b72dfec6dcd810113539"
+            print("Randomly initializing CTransPath...")
+        model_name = f"xiyuewang-ctranspath-{digest[:8]}"
 
         transform = transforms.Compose([
             transforms.ToImage(),  # convert to tensor, only needed for PIL images

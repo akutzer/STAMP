@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from typing import Optional, Tuple, List
 
@@ -8,8 +9,8 @@ from torch.utils.data import Dataset, DataLoader
 from transformers import AutoConfig, AutoModel, PretrainedConfig
 from tqdm import tqdm
 
-from tissuemap.classifier.data import get_augmentation
-from tissuemap.features.extractor.feature_extractors import create_ctranspath, create_uni, FeatureExtractor
+from .data import get_augmentation
+from ..extractor.feature_extractors import FeatureExtractor
 
 
 
@@ -112,6 +113,10 @@ class HistoClassifier(nn.Module):
     def predict_tiles(self, tiles: np.ndarray) -> np.ndarray:
         cache_mode = self.training
         self.train(False)
+        if not hasattr(self, mean):
+            self.mean = torch.tensor(self.config.mean, dtype=self.dtype, device=self.device)
+        if not hasattr(self, std):
+            self.std = torch.tensor(self.config.std, dtype=self.dtype, device=self.device)
 
         tiles = torch.from_numpy(tiles).to(dtype=self.dtype, device=self.device)
 
@@ -187,7 +192,7 @@ class HistoClassifier(nn.Module):
         is_ctranspath = "ctranspath" in backbone_name
         is_uni = "uni" in backbone_name
         if is_ctranspath:
-            backbone = FeatureExtractor.init_ctranspath(backbone_name, device=device).model
+            backbone = FeatureExtractor.init_ctranspath(checkpoint_path=backbone_name, device=device).model
             config = HistoClassifierConfig(
                 categories = categories,
                 n_classes = len(categories),
@@ -205,7 +210,7 @@ class HistoClassifier(nn.Module):
             })
         elif is_uni:
             # TODO: freeze first layers
-            backbone = FeatureExtractor.init_uni(backbone_name, device=device).model
+            backbone = FeatureExtractor.init_uni(checkpoint_path=backbone_name, device=device).model
             config = HistoClassifierConfig(
                 categories = categories,
                 n_classes = len(categories),
@@ -229,6 +234,10 @@ class HistoClassifier(nn.Module):
                 hidden_dim = config.hidden_size
             else:
                 raise AttributeError
+            if not hasattr(config, "mean"):
+                config.mean = [0.485, 0.456, 0.406]
+            if not hasattr(config, "std"):
+                config.std = [0.229, 0.224, 0.225]
             config = HistoClassifierConfig(**config.to_dict())
             config.update(
                 {
@@ -243,8 +252,6 @@ class HistoClassifier(nn.Module):
         model = cls(backbone, config.hidden_dim, config.n_classes, is_ctranspath=is_ctranspath, is_uni=is_uni)
         model.to(device)
         model.config = config
-        model.mean = torch.tensor(config.mean, dtype=model.dtype, device=model.device)
-        model.std = torch.tensor(config.std, dtype=model.dtype, device=model.device)
     
         return model
 
@@ -265,8 +272,6 @@ class HistoClassifier(nn.Module):
         model.load_state_dict(state_dict)
         model.to(device)
         model.config = config
-        model.mean = torch.tensor(config.mean, dtype=model.dtype, device=model.device)
-        model.std = torch.tensor(config.std, dtype=model.dtype, device=model.device)
 
         return model
 
@@ -294,3 +299,36 @@ class SlideTileDataset(Dataset):
             image = self.transform(image)
 
         return image
+
+
+def create_ctranspath(checkpoint_path: Optional[str] = None, device: str = "cpu"):
+    # initializing the model
+    model = swin_tiny_patch4_window7_224(embed_layer=ConvStem, pretrained=False)
+    model.head = nn.Identity()
+
+    # loading the checkpoint weights and updating the weights
+    if checkpoint_path is not None:  
+        digest = get_digest(checkpoint_path)
+        assert digest == "7c998680060c8743551a412583fac689db43cec07053b72dfec6dcd810113539"
+        weights = torch.load(checkpoint_path, map_location=torch.device("cpu"))
+        model.load_state_dict(weights["model"], strict=True)
+
+        # initializing the model
+        model = swin_tiny_patch4_window7_224(embed_layer=ConvStem, pretrained=False)
+        model.head = nn.Identity()
+    model.to(device)
+    return model
+
+
+def create_uni(checkpoint_path: Optional[str] = None, device: str = "cpu"):
+    uni_kwargs = {
+            'model_name': 'vit_large_patch16_224',
+            'img_size': 224, 
+            'patch_size': 16, 
+            'init_values': 1e-5, 
+            'num_classes': 0, 
+            'dynamic_img_size': True
+        }
+    model = timm.create_model(**uni_kwargs)
+    model.to(device)
+    return model

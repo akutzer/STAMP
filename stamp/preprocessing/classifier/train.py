@@ -1,18 +1,18 @@
 from pathlib import Path
 from datetime import datetime
+import argparse
 
 import torch
 from torch import nn
-# from torch.utils.data import DataLoader
 from fastai.vision.all import (
     Learner, DataLoader, DataLoaders, RocAuc, RocAucBinary, F1Score, AccumMetric, 
     Precision, Recall, accuracy, SaveModelCallback, CSVLogger, EarlyStoppingCallback,
 )
 from transformers import AutoImageProcessor
 
-from tissuemap.classifier.data import get_augmentation, HistoCRCDataset, plot_grid
-from tissuemap.classifier.model import HistoClassifier
-from tissuemap.classifier.utils import validate, validate_binarized
+from stamp.preprocessing.classifier.data import get_augmentation, HistoCRCDataset, plot_grid
+from stamp.preprocessing.classifier.model import HistoClassifier
+from stamp.preprocessing.classifier.utils import validate, validate_binarized
 
 
 
@@ -135,3 +135,32 @@ def get_run_name(backbone: str, is_binary: bool) -> str:
     backbone_name = Path(backbone).stem
     run_name = f"{backbone_name}_binary={str(is_binary)}_{time}"
     return run_name
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Train a tissue classifier.")
+    parser.add_argument("--backbone", required=True, help="The backbone model to use for training. Must be either `ctranspath`, `uni` or a path/hubname to a huggingface model.")
+    parser.add_argument("--train_dir", required=True, help="Directory containing training data. Directory structure must be in a CRC-100K like form.")
+    parser.add_argument("--valid_dir", required=True, help="Directory containing validation data. Directory structure must be in a CRC-100K like form.")
+    parser.add_argument("--save_dir", default="models/", help="Directory to save the trained model.")
+    parser.add_argument("--batch_size", type=int, default=64, help="Batch size for training.")
+    parser.add_argument("--binary", action="store_true", help="Merges the categories `TUM` and `STR` into a single class, while all other categories become `NORM`. This should only be used for CRC-100k.")
+    parser.add_argument("--ignore_categories", nargs='*', default=[], help="List of categories to ignore.")
+    parser.add_argument("--cores", type=int, default=8, help="Number of CPU cores to use during dataloading.")
+
+    args = parser.parse_args()
+
+    train(
+        backbone=args.backbone,
+        train_dir=args.train_dir,
+        valid_dir=args.valid_dir,
+        save_dir=args.save_dir,
+        batch_size=args.batch_size,
+        binary=args.binary,
+        ignore_categories=args.ignore_categories,
+        cores=args.cores
+    )
+
+
+if __name__ == "__main__":
+    main()
