@@ -99,7 +99,9 @@ class FeatureExtractor:
         """
         
         # loading the checkpoint weights
-        asset_dir = f"{os.environ['STAMP_RESOURCES_DIR']}/uni"
+        asset_dir = kwargs.pop("asset_dir", None)
+        if asset_dir is None:
+            asset_dir = f"{os.environ['STAMP_RESOURCES_DIR']}/uni"
         digest = get_digest(f"{asset_dir}/vit_large_patch16_224.dinov2.uni_mass100k/pytorch_model.bin")
         model_name = f"mahmood-uni-{digest[:8]}"
 

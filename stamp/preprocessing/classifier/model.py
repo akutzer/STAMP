@@ -210,7 +210,7 @@ class HistoClassifier(nn.Module):
                 "label2id": {cat: i for i, cat in enumerate(categories)},
             })
         elif is_uni:
-            backbone = FeatureExtractor.init_uni(checkpoint_path=backbone_name, device=device).model
+            backbone = FeatureExtractor.init_uni(asset_dir=backbone_name, device=device).model
 
             # freeze all except the last k layers
             k = 2

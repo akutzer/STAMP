@@ -163,6 +163,7 @@ def main() -> None:
     parser.add_argument("--valid_dir", required=True, help="Directory containing validation data. Directory structure must be in a CRC-100K like form.")
     parser.add_argument("--save_dir", default="models/", help="Directory to save the trained model.")
     parser.add_argument("--batch_size", type=int, default=64, help="Batch size for training.")
+    parser.add_argument("--n_epoch", type=int, default=20, help="Maximal number of epochs.")
     parser.add_argument("--binary", action="store_true", help="Merges the categories `TUM` and `STR` into a single class, while all other categories become `NORM`. This should only be used for CRC-100k.")
     parser.add_argument("--ignore_categories", nargs='*', default=[], help="List of categories to ignore.")
     parser.add_argument("--cores", type=int, default=8, help="Number of CPU cores to use during dataloading.")
@@ -175,6 +176,7 @@ def main() -> None:
         valid_dir=args.valid_dir,
         save_dir=args.save_dir,
         batch_size=args.batch_size,
+        n_epoch=args.n_epoch,
         binary=args.binary,
         ignore_categories=args.ignore_categories,
         cores=args.cores
