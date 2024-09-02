@@ -159,7 +159,7 @@ class HistoClassifier(nn.Module):
 
         self.train(cache_mode)
         return out
-    
+
     def predict_patches(
             self, patches: np.ndarray, cores: int = 8, batch_size: int = 64
     ) -> np.ndarray:
@@ -209,8 +209,17 @@ class HistoClassifier(nn.Module):
                 "label2id": {cat: i for i, cat in enumerate(categories)},
             })
         elif is_uni:
-            # TODO: freeze first layers
             backbone = FeatureExtractor.init_uni(checkpoint_path=backbone_name, device=device).model
+
+            # freeze all except the last k layers
+            k = 2
+            for param in backbone.parameters():
+                param.requires_grad = False
+            for param in backbone.blocks[-k:].parameters():
+                param.requires_grad = True
+            for param in backbone.norm.parameters():
+                param.requires_grad = True
+
             config = HistoClassifierConfig(
                 categories = categories,
                 n_classes = len(categories),
@@ -234,10 +243,6 @@ class HistoClassifier(nn.Module):
                 hidden_dim = config.hidden_size
             else:
                 raise AttributeError
-            if not hasattr(config, "mean"):
-                config.mean = [0.485, 0.456, 0.406]
-            if not hasattr(config, "std"):
-                config.std = [0.229, 0.224, 0.225]
             config = HistoClassifierConfig(**config.to_dict())
             config.update(
                 {
@@ -250,9 +255,8 @@ class HistoClassifier(nn.Module):
 
             backbone = AutoModel.from_pretrained(backbone_name)
         model = cls(backbone, config.hidden_dim, config.n_classes, is_ctranspath=is_ctranspath, is_uni=is_uni)
-        model.to(device)
         model.config = config
-    
+        model.to(device)
         return model
 
     @classmethod
@@ -270,9 +274,8 @@ class HistoClassifier(nn.Module):
         model = cls(backbone, config.hidden_dim, config.n_classes, is_ctranspath=config.is_ctranspath, is_uni=config.is_uni)
         state_dict = torch.load(model_dir / "model.pt", map_location=torch.device("cpu"), weights_only=True)
         model.load_state_dict(state_dict)
-        model.to(device)
         model.config = config
-
+        model.to(device)
         return model
 
     def save_pretrained(self, path: str):

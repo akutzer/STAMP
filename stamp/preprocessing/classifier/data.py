@@ -1,13 +1,13 @@
 from pathlib import Path
 from typing import Optional, Sequence, List, Tuple
 
+import numpy as np
 import torch
 from torch.utils.data import Dataset
 from torchvision.transforms import v2
 from PIL import Image
 import pandas as pd
 import matplotlib.pyplot as plt
-
 
 
 def get_imgs(directory: Path) -> List[str]:
@@ -58,10 +58,12 @@ class HistoCRCDataset(Dataset):
         augmentation: Optional[v2.Transform] = None,
         reduce_to_binary: bool = False,
         ignore_categories: list = [],
+        truncate: bool = False
     ):
         self.img_dir = Path(img_dir)
         self.augmentation = augmentation
         self._ignore_categories = set(ignore_categories)
+        self.truncate = truncate
 
         cat_img_map = {
             x.stem: imgs
@@ -96,9 +98,11 @@ class HistoCRCDataset(Dataset):
         )
 
     def __len__(self) -> int:
-        return len(self.data)
+        return len(self.data) if not self.truncate else len(self.data) // 10
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        if self.truncate:
+            idx = np.random.choice(np.arange(len(self.data)))
         img_path, label = self.data.iloc[idx, :2]
         image = self._transform(Image.open(img_path).convert("RGB"))
         if self.augmentation:

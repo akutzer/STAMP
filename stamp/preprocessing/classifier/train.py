@@ -1,14 +1,17 @@
+import argparse
 from pathlib import Path
 from datetime import datetime
-import argparse
+from functools import partial
 
 import torch
 from torch import nn
 from fastai.vision.all import (
     Learner, DataLoader, DataLoaders, RocAuc, RocAucBinary, F1Score, AccumMetric, 
     Precision, Recall, accuracy, SaveModelCallback, CSVLogger, EarlyStoppingCallback,
+    OptimWrapper
 )
 from transformers import AutoImageProcessor
+import matplotlib.pyplot as plt
 
 from stamp.preprocessing.classifier.data import get_augmentation, HistoCRCDataset, plot_grid
 from stamp.preprocessing.classifier.model import HistoClassifier
@@ -22,9 +25,11 @@ def train(
     valid_dir: str,
     save_dir: str = "models/",
     batch_size: int = 64,
+    n_epoch: int = 20,
     binary: bool = False,
     ignore_categories: list = [],
-    cores: int = 8
+    cores: int = 8,
+    plot: bool = True
 ) -> nn.Module:
     run_name = get_run_name(backbone, binary)
     model_save_path = Path(save_dir) / Path(run_name)
@@ -47,7 +52,7 @@ def train(
     valid_aug = get_augmentation(img_size, mean, std, validation=True)
 
     # initialize datasets and dataloaders
-    train_ds = HistoCRCDataset(train_dir, augmentation=train_aug, reduce_to_binary=binary, ignore_categories=ignore_categories)
+    train_ds = HistoCRCDataset(train_dir, augmentation=train_aug, reduce_to_binary=binary, ignore_categories=ignore_categories, truncate=True)
     train_ds.describe()
     valid_ds = HistoCRCDataset(valid_dir, augmentation=valid_aug, reduce_to_binary=binary, ignore_categories=ignore_categories)
     valid_ds.describe()
@@ -92,6 +97,7 @@ def train(
         dls,
         model,
         loss_func=criterion,
+        opt_func = partial(OptimWrapper, opt=torch.optim.AdamW),
         metrics=[
             AccumMetric(accuracy, flatten=False),
             Precision(average="macro"),
@@ -107,7 +113,20 @@ def train(
         EarlyStoppingCallback(monitor="valid_loss", min_delta=0., patience=4),
         CSVLogger(),
     ]
-    learn.fit_one_cycle(n_epoch=2, lr_max=1e-4, wd=1e-6, cbs=cbs)
+    learn.fit_one_cycle(n_epoch=n_epoch, reset_opt=True, lr_max=1e-4, wd=1e-2, cbs=cbs)
+
+    # Plot training and validation losses as well as learning rate schedule
+    if plot:
+        path_plots = model_save_path / "plots"
+        path_plots.mkdir(parents=True, exist_ok=True)
+
+        learn.recorder.plot_loss()
+        plt.savefig(path_plots / 'losses_plot.png')
+        plt.close()
+
+        learn.recorder.plot_sched()
+        plt.savefig(path_plots / 'lr_scheduler.png')
+        plt.close()
 
     # save best checkpoint
     learn.model.save_pretrained(model_save_path)
