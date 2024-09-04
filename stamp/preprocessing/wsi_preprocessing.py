@@ -94,7 +94,7 @@ def preprocess(
 
     if use_classifier := (classifier_path is not None and classifier_path.exists()):
         tissue_classifier = HistoClassifier.from_pretrained(classifier_path, device=device)
-        tissue_classifier = torch.compile(tissue_classifier)
+
 
     # Create cache and output directories
     if cache:
@@ -234,9 +234,14 @@ def preprocess(
                     canny_img = AsyncMemmapImage(shape=(*slide_size, 3), max_workers=max_workers)
 
                 total_rejected, total_tiles = 0, 0
+                load_time, tile_time, filter_time, write_time, embedd_time, classify_time = 0, 0, 0, 0, 0, 0
+                t = time.time()
                 for chunk, position in tqdm(chunk_loader, leave=False):
                     # `chunk`: 3D numpy array of shape (chunk_height, chunk_width, 3) representing the current chunk of the WSI
                     # `position`: (row, column) tuple representing the position of the top-left corner of a chunk
+                    load_time += time.time() - t
+                    t = time.time()
+
                     if chunk is None:
                         continue
                         
@@ -245,6 +250,7 @@ def preprocess(
                     # `tile_coords`: (num_tiles, 2) where each row represents (row, column) position of the top-left corner of a tile
                     tiles, tile_coords = view_as_tiles(chunk, tile_size, position)
                     
+                    
                     # Remove completely black tiles (i.e., tiles where all pixel values are 0 across all channels)
                     # These tiles may be outside the slide's boundaries or have been rejected by previous processing steps (in the case of reading from a canny_slide.jpg)
                     non_empty_tiles = tiles.any(axis=(-3, -2, -1))
@@ -252,9 +258,15 @@ def preprocess(
                     tile_coords = tile_coords[non_empty_tiles, ...]
                     total_tiles += tiles.shape[0]
 
+                    tile_time += time.time() - t
+                    t = time.time()
+
                     # Filter out tiles that are considered background by Canny filter
                     tiles, tile_coords, num_rejected = filter_background(tiles, tile_coords)
                     total_rejected += num_rejected
+
+                    filter_time += time.time() - t
+                    t = time.time()
 
                     if tiles.shape[0] == 0:
                         continue
@@ -262,11 +274,21 @@ def preprocess(
                     if generate_cache:
                         canny_img.write_tiles(tiles, tile_coords, use_threading=True)
 
+                    write_time += time.time() - t
+                    t = time.time() 
+
                     coords.append(tile_coords)
                     embeddings.append(extractor.single_extract(tiles))
+
+                    embedd_time += time.time() - t
+                    t = time.time() 
+
                     if use_classifier:
                         tile_classes.append(tissue_classifier.predict_tiles(tiles))
                         # tile_classes.append(tissue_classifier.predict_patches(tiles))
+                    
+                    classify_time += time.time() - t
+                    t = time.time() 
 
             except MPPExtractionError:
                 if delete_slide:
@@ -284,6 +306,7 @@ def preprocess(
             #     logging.error(f"Failed loading slide, skipping... Unknown error: {e}")
             #     error_slides.append(slide_name)
             #     continue
+            print(f"{load_time=}", f"{tile_time=}", f"{filter_time=}", f"{write_time=}", f"{embedd_time=}", f"{classify_time=}", sep="\n")
             
             del chunk_loader
             del slide

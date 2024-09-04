@@ -53,7 +53,8 @@ class FeatureExtractor:
         self.dtype = next(self.model.parameters()).dtype
         self.mean, self.std = self._extract_mean_std(self.transform, self.dtype, self.device)
 
-        model = torch.compile(model)
+        model.compile()
+        torch._dynamo.reset()
 
     @classmethod
     def init_ctranspath(cls, checkpoint_path: Optional[str] = None, device: str = "cpu") -> "FeatureExtractor":
