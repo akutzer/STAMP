@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, List, Union
 
 import numpy as np
 import torch
@@ -114,15 +114,20 @@ class HistoClassifier(nn.Module):
         self.train(cache_mode)
         return out
 
-    def predict_tiles(self, tiles: np.ndarray) -> np.ndarray:
+    def predict_tiles(self, tiles: Union[np.ndarray, torch.Tensor]) -> np.ndarray:
         cache_mode = self.training
         self.train(False)
         if not hasattr(self, "mean"):
-            self.mean = torch.tensor(self.config.mean, dtype=self.dtype, device=self.device)
+            self.mean = torch.tensor(self.config.mean, dtype=self.dtype, device=self.device,)
         if not hasattr(self, "std"):
             self.std = torch.tensor(self.config.std, dtype=self.dtype, device=self.device)
 
-        tiles = torch.from_numpy(tiles).to(dtype=self.dtype, device=self.device)
+        if isinstance(tiles, np.ndarray):
+            tiles = torch.from_numpy(tiles).to(dtype=self.dtype, device=self.device, non_blocking=True)
+        elif isinstance(tiles, torch.Tensor):
+            tiles = tiles.to(dtype=self.dtype, device=self.device, non_blocking=True)
+        else:
+            raise ValueError(f"Unknown type `{type(tiles)}` for tiles.")
 
         tiles = tiles / 255.0
         tiles -= self.mean
@@ -138,7 +143,10 @@ class HistoClassifier(nn.Module):
             if not (self.is_ctranspath or self.is_uni):
                 pred = pred.pooler_output
             pred = self.head(pred)
-            probs = torch.softmax(pred, dim=-1).half().cpu()
+            probs = torch.softmax(pred, dim=-1)
+        
+        probs = probs.to(dtype=torch.float16, device="cpu", non_blocking=True)
+        torch.cuda.synchronize()
 
         if unsqueeze:
             probs = probs[0]

@@ -276,6 +276,7 @@ def preprocess(
                     write_time += time.time() - t
                     t = time.time() 
 
+                    tiles = torch.from_numpy(tiles).to(device=device, non_blocking=True)
                     coords.append(tile_coords)
                     embeddings.append(extractor.single_extract(tiles))
 

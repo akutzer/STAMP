@@ -243,14 +243,19 @@ class FeatureExtractor:
         features = torch.concat(features, dim=0).cpu().numpy()
         return features
     
-    def single_extract(self, tiles: np.ndarray) -> np.ndarray:
+    def single_extract(self, tiles: Union[np.ndarray, torch.Tensor]) -> np.ndarray:
         """Extracts features from slide tiles.
 
         Args:
             tiles:  Array of shape (n_tiles, tile_h, tile_w, 3)
             cores:  Number of cores for dataloader
         """
-        tiles = torch.from_numpy(tiles).to(dtype=self.dtype, device=self.device)
+        if isinstance(tiles, np.ndarray):
+            tiles = torch.from_numpy(tiles).to(dtype=self.dtype, device=self.device, non_blocking=True)
+        elif isinstance(tiles, torch.Tensor):
+            tiles = tiles.to(dtype=self.dtype, device=self.device, non_blocking=True)
+        else:
+            raise ValueError(f"Unknown type `{type(tiles)}` for tiles.")
 
         tiles = tiles / 255.0
         tiles -= self.mean
@@ -261,7 +266,10 @@ class FeatureExtractor:
         with torch.inference_mode(), torch.autocast(self.device.type):
             features = self.model(tiles)
         
-        return features.half().cpu().numpy()
+        features = features.to(dtype=torch.float16, device="cpu", non_blocking=True)
+        torch.cuda.synchronize()
+        features = features.numpy()
+        return features
 
     @staticmethod
     def _extract_mean_std(transform, dtype=None, device=None):
