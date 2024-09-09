@@ -9,8 +9,10 @@ from PIL import Image, ImageDraw, ImageFont
 
 Image.MAX_IMAGE_PIXELS = None
 
-
-class AsyncMemmapImage:
+# TODO: make context manager which automatically deletes the temporary directory
+# or test if tempfile.TemporaryDirectory instead of self._filename helps to automatically
+# delete dir after CTRL+C
+class MemmapImage:
     def __init__(
         self, 
         shape: Tuple[int, ...], 

@@ -18,8 +18,8 @@ from .normalizer.normalizer import MacenkoNormalizer
 from .extractor.feature_extractors import FeatureExtractor, store_features, store_metadata
 from .helpers.common import supported_extensions
 from .helpers.exceptions import MPPExtractionError
-from .helpers.chunk_loaders import AsyncChunkLoader, JPEGChunkLoader, view_as_tiles
-from .helpers.memmap_image import AsyncMemmapImage
+from .helpers.chunk_loaders import OpenSlideChunkLoader, JPEGChunkLoader, view_as_tiles
+from .helpers.memmap_image import MemmapImage
 from .helpers.background_rejection import filter_background
 from .classifier.model import HistoClassifier
 
@@ -195,7 +195,7 @@ def preprocess(
 
 
         start_loading_time = time.time()
-        with lock_file(slide_path):
+        with lock_file(slide_path), tempfile.NamedTemporaryFile() as slide_path_tmp:
             if (slide_jpg := slide_cache_dir / "canny_slide.jpg").exists() and use_cache:
                 try:
                     chunk_loader = JPEGChunkLoader(slide_jpg, tile_size=tile_size[0])
@@ -207,13 +207,12 @@ def preprocess(
             else:
                 try:
                     if preload_wsi:
-                        slide_path_tmp = tempfile.NamedTemporaryFile(delete=False)
                         shutil.copy(slide_path, slide_path_tmp.name)
                         slide = openslide.OpenSlide(slide_path_tmp.name)
                     else:
                         slide = openslide.OpenSlide(slide_path)
                     original_slide_size = slide.dimensions
-                    chunk_loader = AsyncChunkLoader(
+                    chunk_loader = OpenSlideChunkLoader(
                         slide, target_microns=target_microns, target_tile_size=tile_size[0], max_workers=max_workers
                     )
                 except openslide.lowlevel.OpenSlideUnsupportedFormatError:
@@ -231,7 +230,7 @@ def preprocess(
 
                 # if generate_cache := (cache and not slide_jpg.exists()):
                 if generate_cache := cache:
-                    canny_img = AsyncMemmapImage(shape=(*slide_size, 3), max_workers=max_workers)
+                    canny_img = MemmapImage(shape=(*slide_size, 3), max_workers=max_workers)
 
                 total_rejected, total_tiles = 0, 0
                 load_time, tile_time, filter_time, write_time, embedd_time, classify_time = 0, 0, 0, 0, 0, 0
@@ -302,10 +301,11 @@ def preprocess(
                 logging.error(f"Failed loading slide, skipping... Error: {e}")
                 error_slides.append(slide_name)
                 continue
-            # except Exception as e:
-            #     logging.error(f"Failed loading slide, skipping... Unknown error: {e}")
-            #     error_slides.append(slide_name)
-            #     continue
+            except Exception as e:
+                logging.error(f"Failed loading slide, skipping... Unknown error: {e}")
+                error_slides.append(slide_name)
+                continue
+
             print(f"{load_time=}", f"{tile_time=}", f"{filter_time=}", f"{write_time=}", f"{embedd_time=}", f"{classify_time=}", sep="\n")
             
             del chunk_loader

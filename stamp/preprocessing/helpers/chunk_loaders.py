@@ -97,7 +97,7 @@ def view_as_tiles(
     return tiles, tile_positions
 
 
-class AsyncChunkLoader:
+class OpenSlideChunkLoader:
     def __init__(self, slide: openslide.OpenSlide, target_microns: int = 256, target_tile_size: int = 224,
                  tiles_per_chunk: int = 8, max_workers: int = 4):
         """
@@ -143,7 +143,7 @@ class AsyncChunkLoader:
             self.executor.shutdown(wait=False, cancel_futures=True)
         raise KeyboardInterrupt
             
-    def __iter__(self) -> 'AsyncChunkLoader':
+    def __iter__(self) -> 'OpenSlideChunkLoader':
         """Initialize the executor and prepare to load chunks."""
         self.executor = futures.ThreadPoolExecutor(max_workers=self.max_workers)
         for h in range(self._chunks[1]):  # Rows

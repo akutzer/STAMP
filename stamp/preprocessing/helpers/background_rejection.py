@@ -2,6 +2,7 @@ from typing import Tuple
 import numpy as np
 import cv2
 from PIL import Image
+from concurrent.futures import ThreadPoolExecutor
 
 
 def canny_filter(tile: np.ndarray, low_threshold: int = 40, high_threshold: int = 100, edge_threshold: float = 2.0) -> bool:
@@ -23,6 +24,8 @@ def canny_filter(tile: np.ndarray, low_threshold: int = 40, high_threshold: int 
 def filter_background(patches: np.ndarray, coordinates: np.ndarray) -> Tuple[np.ndarray, np.ndarray, int]:
     """Filter out patches that only contain background based on edge detection."""
     has_edges = np.array([canny_filter(patch) for patch in patches], dtype=np.bool_)
+    # with ThreadPoolExecutor(max_workers=8) as executor:
+    #     has_edges = np.array(list(executor.map(canny_filter, patches)), dtype=np.bool_)
 
     patches = patches[has_edges]
     coordinates = coordinates[has_edges]

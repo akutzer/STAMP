@@ -72,8 +72,8 @@ class HistoClassifier(nn.Module):
         self.is_ctranspath = is_ctranspath
         self.is_uni = is_uni
         
-        self.backbone.compile()
         torch._dynamo.reset()
+        self.backbone.compile() 
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         out = self.backbone(x)
