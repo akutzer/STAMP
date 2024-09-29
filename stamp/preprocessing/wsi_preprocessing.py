@@ -7,6 +7,7 @@ import time
 from datetime import timedelta
 from typing import Optional, List
 import tempfile
+import random
 
 import openslide
 from tqdm import tqdm
@@ -28,8 +29,10 @@ Image.MAX_IMAGE_PIXELS = None
 
 
 def remove_lockfile(file: Path) -> None:
-    if file.exists():  # Catch collision cases
-        file.unlink()
+    try:
+        file.unlink(missing_ok=True)
+    except OSError:
+        pass  # No write permissions for WSI directory but lock found
 
 
 @contextmanager
@@ -165,14 +168,14 @@ def preprocess(
         normalized=normalize
     )
     
-    # random.shuffle(slides_to_process)
+    random.shuffle(slides_to_process)
     for slide_path in tqdm(slides_to_process, desc="\nPreprocessing progress", leave=False, miniters=1, mininterval=0):
         slide_name = slide_path.stem
         slide_cache_dir = cache_dir / slide_name
         if cache:
             slide_cache_dir.mkdir(parents=True, exist_ok=True)
 
-        logging.info(f"\n\n===== Processing slide {slide_name} =====")
+        logging.info(f"\n\n===== Processing slide {slide_path.name} =====")
         slide_subdir = slide_path.parent.relative_to(wsi_dir)
 
         if not keep_dir_structure or slide_subdir == Path("."):
@@ -311,32 +314,32 @@ def preprocess(
             
             del chunk_loader
             del slide
+
+            if len(embeddings) == 0:
+                logging.warning("No tiles remain for feature extraction after preprocessing. Skipping...")
+                continue
         
             embeddings = np.concatenate(embeddings, axis=0)
             coords = np.concatenate(coords, axis=0)
             if use_classifier:
                 tile_classes = np.concatenate(tile_classes, axis=0)
 
-            if embeddings.shape[0] > 0:
-                # Order embeddings row and then column-wise
-                max_width = coords[:, 1].max()
-                idx = coords[:, 0] * max_width + coords[:, 1]
-                sort_indices = np.argsort(idx)
-                embeddings, coords = embeddings[sort_indices], coords[sort_indices]
-                if use_classifier:
-                    tile_classes = tile_classes[sort_indices]
+            # Order embeddings row and then column-wise
+            max_width = coords[:, 1].max()
+            idx = coords[:, 0] * max_width + coords[:, 1]
+            sort_indices = np.argsort(idx)
+            embeddings, coords = embeddings[sort_indices], coords[sort_indices]
+            if use_classifier:
+                tile_classes = tile_classes[sort_indices]
 
-                if use_classifier:
-                    store_features(
-                        feature_output_path, embeddings, coords, extractor.name,
-                        tile_cls=tile_classes, id2class=tissue_classifier.config.categories
-                    )
-                else: 
-                    store_features(feature_output_path, embeddings, coords, extractor.name)
-                num_processed += 1
-            else:
-                logging.warning("No tiles remain for feature extraction after preprocessing. Skipping...")
-                continue
+            if use_classifier:
+                store_features(
+                    feature_output_path, embeddings, coords, extractor.name,
+                    tile_cls=tile_classes, id2class=tissue_classifier.config.categories
+                )
+            else: 
+                store_features(feature_output_path, embeddings, coords, extractor.name)
+            num_processed += 1
             
             try:
                 if generate_cache:
