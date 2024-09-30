@@ -87,21 +87,8 @@ def train_categorical_model_(
         print(f'{model_path} already exists. Skipping...')
         return
 
-    clini_df = pd.read_csv(clini_table, dtype=str) if Path(clini_table).suffix == '.csv' else pd.read_excel(clini_table, dtype=str)
-    slide_df = pd.read_csv(slide_table, dtype=str) if Path(slide_table).suffix == '.csv' else pd.read_excel(slide_table, dtype=str)
- 
-    df = clini_df.merge(slide_df, on='PATIENT')
-
-    # filter na, infer categories if not given
-    df = df.dropna(subset=target_label)
-
-    # TODO move into get_cohort_df
-    if not categories:
-        categories = df[target_label].unique()
-    categories = np.array(categories)
+    df, categories = get_cohort_df(clini_table, slide_table, feature_dir, target_label, categories)
     info['categories'] = list(categories)
-
-    df = get_cohort_df(clini_table, slide_table, feature_dir, target_label, categories)
 
     print('Overall distribution')
     print(df[target_label].value_counts())
@@ -150,7 +137,7 @@ def _make_cat_enc(df, cats) -> SKLearnEncoder:
     #
     # due to weirdeties in sklearn's OneHotEncoder.fit we fill NAs with other values
     # randomly sampled with the same probability as their distribution in the
-    # dataset.  This is necessary for correctly determining StandardScaler's weigth
+    # dataset.  This is necessary for correctly determining StandardScaler's weight
     fitting_cats = []
     for cat in cats:
         weights = df[cat].value_counts(normalize=True)
@@ -193,21 +180,18 @@ def deploy_categorical_model_(
         model_path:  Path of the model to deploy.
         output_path:  File to save model in.
     """
-    use_cpu=True
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     if device.type == "cuda":
         # allow for usage of TensorFloat32 as internal dtype for matmul on modern NVIDIA GPUs
         torch.set_float32_matmul_precision("high")
     
-    use_cpu= (device.type == "cpu") # True or False
-    
+    use_cpu = (device.type == "cpu") # True or False
     feature_dir = Path(feature_dir)
     model_path = Path(model_path)
     output_path = Path(output_path)
     if (preds_csv := output_path/'patient-preds.csv').exists():
         print(f'{preds_csv} already exists!  Skipping...')
         return
-
 
     learn = safe_load_learner(model_path, use_cpu=use_cpu)
     target_enc = get_target_enc(learn)
@@ -217,7 +201,7 @@ def deploy_categorical_model_(
     cat_labels = cat_labels or learn.cat_labels
     cont_labels = cont_labels or learn.cont_labels
 
-    test_df = get_cohort_df(clini_table, slide_table, feature_dir, target_label, categories)
+    test_df, categories = get_cohort_df(clini_table, slide_table, feature_dir, target_label, categories)
 
     patient_preds_df = deploy(test_df=test_df, learn=learn, target_label=target_label, device=device)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -268,29 +252,8 @@ def categorical_crossval_(
         'n_splits': n_splits,
         'datetime': datetime.now().astimezone().isoformat()}
 
-    clini_df = pd.read_csv(clini_table, dtype=str) if Path(clini_table).suffix == '.csv' else pd.read_excel(clini_table, dtype=str)
-    slide_df = pd.read_csv(slide_table, dtype=str) if Path(slide_table).suffix == '.csv' else pd.read_excel(slide_table, dtype=str)
-
-
-    if 'PATIENT' not in clini_df.columns:
-        raise ValueError("The PATIENT column is missing in the clini_table.\n\
-                         Please ensure the patient identifier column is named PATIENT.")
-    
-    if 'PATIENT' not in slide_df.columns:
-        raise ValueError("The PATIENT column is missing in the slide_table.\n\
-                         Please ensure the patient identifier column is named PATIENT.")
-
-    df = clini_df.merge(slide_df, on='PATIENT')
-
-    # filter na, infer categories if not given
-    df = df.dropna(subset=target_label)
-
-    if not categories:
-        categories = df[target_label].unique()
-    categories = np.array(categories)
+    df, categories = get_cohort_df(clini_table, slide_table, feature_dir, target_label, categories)
     info['categories'] = list(categories)
-
-    df = get_cohort_df(clini_table, slide_table, feature_dir, target_label, categories)
 
     info['class distribution'] = {'overall': {
         k: int(v) for k, v in df[target_label].value_counts().items()}}

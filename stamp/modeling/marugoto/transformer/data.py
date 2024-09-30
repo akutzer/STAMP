@@ -237,10 +237,8 @@ def _make_basic_dataset(
 
 
 def zip_bag_targ(bag, targets):
-    features, lengths = bag
     return (
-        features,
-        lengths,
+        *bag,
         targets.squeeze(),
     )
 
@@ -288,7 +286,7 @@ def _attach_add_to_bag_and_zip_with_targ(bag, add, targ):
             bag[0], # the bag's features
             add.repeat(bag[0].shape[0], 1)  # the additional features
         ], dim=1),
-        bag[1], # the bag's length
+        *bag[1:], # the bag's length, slide ids and normalized coords
         targ.squeeze(),   # the ground truth
     )
 
@@ -312,7 +310,15 @@ def get_cohort_df(
     if 'FILENAME' in clini_df.columns and 'FILENAME' in slide_df.columns:
         clini_df = clini_df.drop(columns=['FILENAME'])
     
-    df = clini_df.merge(slide_df, on='PATIENT')
+    intersection = clini_df.keys().intersection(slide_df.keys())    
+    df = clini_df.merge(slide_df, on=intersection.tolist())
+
+    # filter na and infer categories if not given
+    df = df.dropna(subset=target_label)
+    if categories is None or len(categories) == 0:
+        categories = df[target_label].unique()
+    categories = np.array(categories)
+
     # remove uninteresting
     df = df[df[target_label].isin(categories)]
     # remove slides we don't have
@@ -327,4 +333,5 @@ def get_cohort_df(
     patient_slides = df.groupby('PATIENT').slide_path.apply(list)
     df = patient_df.merge(patient_slides, left_on='PATIENT', right_index=True).reset_index()
 
-    return df
+    return df, categories
+    

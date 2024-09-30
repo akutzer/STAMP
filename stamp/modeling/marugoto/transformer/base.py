@@ -30,8 +30,8 @@ def train(
     targets: Tuple[SKLearnEncoder, np.ndarray],
     add_features: Iterable[Tuple[SKLearnEncoder, Sequence[Any]]] = [],
     valid_idxs: np.ndarray,
-    n_epoch: int = 32,
-    patience: int = 8,
+    n_epoch: int = 48,
+    patience: int = 12,
     path: Optional[Path] = None,
     batch_size: int = 64,
     cores: int = 8,
@@ -57,7 +57,7 @@ def train(
         add_features=[
             (enc, vals[~valid_idxs])
             for enc, vals in add_features],
-        bag_size=512)
+        bag_size=1024)
 
     valid_ds = make_dataset(
         bags=bags[valid_idxs],
@@ -83,7 +83,7 @@ def train(
     # for binary classification num_classes=2
     model = TransMIL(
         num_classes=len(target_enc.categories_[0]), input_dim=feature_dim,
-        dim=512, depth=2, heads=8, mlp_dim=512, dropout=.0
+        dim=512, depth=2, heads=8, mlp_dim=512, dropout=.1
     )
     # TODO:
     # maybe increase mlp_dim? Not necessary 4*dim, but maybe a bit?
