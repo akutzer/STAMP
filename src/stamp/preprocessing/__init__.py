@@ -228,10 +228,16 @@ def extract_(
         slide_path
         for extension in supported_extensions
         for slide_path in wsi_dir.glob(f"**/*{extension}")
+        if not (feat_output_dir / slide_path.relative_to(wsi_dir).with_suffix(".h5")).exists()
     ]
     # We shuffle so if we run multiple jobs on multiple computers at the same time,
     # They won't interfere with each other too much
     shuffle(slide_paths)
+
+    device = torch.device(device)
+    is_cuda = device.type == "cuda"
+    enable_autocast = torch.amp.autocast_mode.is_autocast_available(device.type)
+    torch.set_float32_matmul_precision("high")
 
     for slide_path in (progress := tqdm(slide_paths)):
         progress.set_description(str(slide_path.relative_to(wsi_dir)))
@@ -262,12 +268,13 @@ def extract_(
                 default_slide_mpp=default_slide_mpp,
             )
             # Parallelism is implemented in the dataset iterator already, so one worker is enough!
-            dl = DataLoader(ds, batch_size=64, num_workers=1, drop_last=False)
+            dl = DataLoader(ds, batch_size=64, num_workers=1, drop_last=False, pin_memory=True)
 
             feats, xs_um, ys_um = [], [], []
             for tiles, xs, ys in tqdm(dl, leave=False):
-                with torch.inference_mode():
-                    feats.append(model(tiles.to(device)).detach().half().cpu())
+                with torch.inference_mode(), torch.autocast(device.type, enabled=enable_autocast):
+                    emb = model(tiles.to(device))
+                feats.append(emb.half().cpu())
                 xs_um.append(xs.float())
                 ys_um.append(ys.float())
         except MPPExtractionError:

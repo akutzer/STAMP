@@ -3,6 +3,7 @@ try:
     import torch
     from timm.data import resolve_data_config  # type: ignore
     from timm.data.transforms_factory import create_transform
+    from huggingface_hub import login
 except ModuleNotFoundError as e:
     raise ModuleNotFoundError(
         "uni2 dependencies not installed."
@@ -13,7 +14,8 @@ from stamp.preprocessing.extractor import Extractor
 
 
 def uni2() -> Extractor:
-    # pretrained=True needed to load UNI2-h weights (and download weights for the first time)
+    login(new_session=False) # login with your User Access Token, found at https://huggingface.co/settings/tokens
+
     timm_kwargs = {
         "img_size": 224,
         "patch_size": 14,
@@ -29,6 +31,7 @@ def uni2() -> Extractor:
         "reg_tokens": 8,
         "dynamic_img_size": True,
     }
+    # pretrained=True needed to load UNI2-h weights (and download weights for the first time)
     model = timm.create_model(
         "hf-hub:MahmoodLab/UNI2-h", pretrained=True, **timm_kwargs
     )

@@ -8,6 +8,7 @@ try:
     from timm.data.config import resolve_data_config
     from timm.data.transforms_factory import create_transform
     from torch import Tensor
+    from huggingface_hub import login
 except ModuleNotFoundError as e:
     raise ModuleNotFoundError(
         "uni dependencies not installed."
@@ -22,6 +23,8 @@ __license__ = "MIT"
 
 
 def uni(revision: str = "77ffbca1ee1cdcee6e87f6deebd2db8a5888c721") -> Extractor:
+    login(new_session=False) # login with your User Access Token, found at https://huggingface.co/settings/tokens
+    
     model = timm.create_model(  # pyright: ignore[reportPrivateImportUsage]
         f"hf-hub:MahmoodLab/uni@{revision}",
         pretrained=True,

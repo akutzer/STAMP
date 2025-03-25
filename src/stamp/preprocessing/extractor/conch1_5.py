@@ -1,4 +1,5 @@
 try:
+    from huggingface_hub import login
     from transformers import AutoModel
 except ModuleNotFoundError as e:
     raise ModuleNotFoundError(
@@ -10,6 +11,8 @@ from stamp.preprocessing.extractor import Extractor
 
 
 def conch1_5() -> Extractor:
+    login(new_session=False)  # login with your User Access Token, found at https://huggingface.co/settings/tokens
+    
     titan = AutoModel.from_pretrained("MahmoodLab/TITAN", trust_remote_code=True)
     model, eval_transform = titan.return_conch()
     return Extractor(
