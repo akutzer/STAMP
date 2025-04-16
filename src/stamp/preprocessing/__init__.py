@@ -1,7 +1,5 @@
-import hashlib
 import logging
 from collections.abc import Callable, Iterator
-from functools import cache
 from pathlib import Path
 from random import shuffle
 from tempfile import NamedTemporaryFile
@@ -19,6 +17,7 @@ from torch.utils.data import DataLoader, IterableDataset
 from tqdm import tqdm
 
 import stamp
+from stamp.cache import get_processing_code_hash
 from stamp.preprocessing.config import ExtractorName
 from stamp.preprocessing.extractor import Extractor
 from stamp.preprocessing.tiling import (
@@ -54,20 +53,6 @@ supported_extensions = {
 }
 
 _logger = logging.getLogger("stamp")
-
-
-@cache
-def _get_preprocessing_code_hash() -> str:
-    """The hash of the entire preprocessing codebase.
-
-    It is used to assure that features extracted with different versions of this code base
-    can be identified as such after the fact.
-    """
-    hasher = hashlib.sha256()
-    for file_path in sorted(Path(__file__).parent.glob("*.py")):
-        with open(file_path, "rb") as fp:
-            hasher.update(fp.read())
-    return hasher.hexdigest()
 
 
 class _TileDataset(IterableDataset):
@@ -215,7 +200,9 @@ def extract_(
             assert_never(unreachable)
 
     model = extractor.model.to(device).eval()
-    extractor_id = f"{extractor.identifier}-{_get_preprocessing_code_hash()[:8]}"
+    extractor_id = (
+        f"{extractor.identifier}-{get_processing_code_hash(Path(__file__))[:8]}"
+    )
 
     _logger.info(f"Using extractor {extractor.identifier}")
 
@@ -305,7 +292,8 @@ def extract_(
                 h5_fp.attrs["stamp_version"] = stamp.__version__
                 h5_fp.attrs["extractor"] = extractor_id
                 h5_fp.attrs["unit"] = "um"
-                h5_fp.attrs["tile_size"] = tile_size_um
+                h5_fp.attrs["tile_size_um"] = tile_size_um  # changed in v2.1.0
+                h5_fp.attrs["tile_size_px"] = tile_size_px
             except Exception:
                 _logger.exception(f"error while writing {feature_output_path}")
                 if tmp_h5_file is not None:
