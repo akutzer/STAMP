@@ -17,6 +17,11 @@ def get_pat_embs(
 ) -> None:
     """"""
     match encoder:
+        case EncoderName.TITAN:
+            from stamp.encoding.encoder.titan import Titan
+
+            selected_encoder: Encoder = Titan()
+            
         case EncoderName.COBRA:
             from stamp.encoding.encoder.cobra import Cobra
 
