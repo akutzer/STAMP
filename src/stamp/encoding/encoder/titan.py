@@ -1,14 +1,16 @@
 import math
 import os
 from pathlib import Path
-from typing import Optional
+from enum import Enum
+from dataclasses import dataclass, field
+from typing import Optional, List, Tuple
 
 import h5py
 import pandas as pd
 import torch
 from torch.utils.data import Dataset, DataLoader
-from tqdm import tqdm
 from transformers import AutoModel
+from tqdm import tqdm
 
 import stamp
 from stamp.cache import get_processing_code_hash
@@ -17,94 +19,132 @@ from stamp.modeling.data import CoordsInfo, get_coords
 
 
 
+class Mode(Enum):
+    SLIDE = "slide"
+    PATIENT = "patient"
 
-        
+
+@dataclass(frozen=True)
+class EmbeddingConfig:
+    """
+    Attributes:
+        root_dir: Directory containing HDF5 files of the slide features.
+        output_dir: Directory to write slide/patient encoding HDF5 file to.
+        mode: Operation mode; determines whether to encode per-slide or per-patient.
+        slide_table_path: Path to slide-to-patient mapping table. Required when mode is PATIENT.
+        margin: Pixel margin between concatenated slide coordinates.
+    """
+    root_dir: Path
+    output_dir: Path
+    mode: Mode = Mode.SLIDE
+    slide_table_path: Optional[Path] = None
+    margin: int = field(default=10, metadata={"unit": "px"})
+
+    def __post_init__(self):
+        # enforce that slide_table_path is present in PATIENT mode
+        if self.mode == Mode.PATIENT:
+            if self.slide_table_path is None:
+                raise ValueError(
+                    "EmbeddingConfigError: 'slide_table_path' must be provided when mode is PATIENT"
+                )
+            if not self.slide_table_path.exists():
+                raise FileNotFoundError(
+                    f"Slide table not found: {self.slide_table_path}"
+                )
+        # ensure directories exist or create them
+        if not self.root_dir.exists():
+            raise FileNotFoundError(f"Root directory not found: {self.root_dir}")
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
+
 class EmbeddingDataset(Dataset):
     supported_extensions: set = {".h5"}
-    slide_paths: list
 
-    def __init__(self, root_dir: Path, output_dir: Path, slide_table_path: Optional[Path] = None):
-        self.root_dir = root_dir
-        self.output_dir = output_dir
+    def __init__(self, config: EmbeddingConfig):
+        self.config = config
+        self.root_dir = config.root_dir
+        self.output_dir = config.output_dir
+        self.margin = config.margin
+        self.mode = config.mode
 
-        if slide_table_path is not None and slide_table_path.exists():
-            if slide_table_path.suffix == ".csv":
-                self.slide_table = pd.read_csv(slide_table_path)
-            elif slide_table_path.suffix == ".xlsx":
-                self.slide_table = pd.read_excel(slide_table_path)
-            else:
-                self.slide_table = None
-        else:
-            self.slide_table = None
-        
-        self.mode = "slide" if self.slide_table is None else "patient"
-        self._find_slides()
-        
-    def _find_slides(self):
-        if self.mode == "slide":
-            self.slide_paths = self._find_slides_for_slide_emb()
-        elif self.mode == "patient":
-            self.slide_paths = self._find_slides_for_patient_emb()
-        else:
-            self.slide_paths = []
+        # load slide table in patient mode
+        self.slide_table = None
+        if self.mode == Mode.PATIENT:
+            self.slide_table = self._load_slide_table()
+
+        self.slide_paths = self._find_slides()
     
-    def _find_slides_for_slide_emb(self) -> list:
+    def _load_slide_table(self) -> pd.DataFrame:
+        ext = self.config.slide_table_path.suffix.lower()
+        if ext == ".csv":
+            slide_table = pd.read_csv(self.config.slide_table_path)
+        elif ext in {".xls", ".xlsx"}:
+            slide_table = pd.read_excel(self.config.slide_table_path)
+        else:
+            raise ValueError(f"Unsupported slide table format: {ext}")
+        return slide_table
+
+    def _find_slides(self) -> List[Tuple[str, List[Path]]]:
+        if self.mode == Mode.SLIDE:
+            return self._find_slides_for_slide_emb()
+        else:
+            return self._find_slides_for_patient_emb()
+
+    def _find_slides_for_slide_emb(self) -> List[Tuple[str, List[Path]]]:
         return [
-            (slide_path.relative_to(self.root_dir), [slide_path])
-            for extension in self.supported_extensions
-            for slide_path in self.root_dir.glob(f"**/*{extension}")
-            if not (self.output_dir / slide_path.relative_to(self.root_dir).with_suffix(".h5")).exists()
+            (str(slide_path.relative_to(self.root_dir)), [slide_path])
+            for ext in self.supported_extensions
+            for slide_path in self.root_dir.glob(f"**/*{ext}")
         ]
 
-    def _find_slides_for_patient_emb(self) -> list:
-        slide_paths = self._find_slides_for_slide_emb()
-        patient_groups = self.slide_table.groupby("PATIENT")
-        patient_paths = []
+    def _find_slides_for_patient_emb(self) -> List[Tuple[str, List[Path]]]:
+        slide_list = self._find_slides_for_slide_emb()
+        patient_paths: List[Tuple[str, List[Path]]] = []
 
-        for patient_id, group in patient_groups:
-            patient_slides = []
+        for patient_id, group in self.slide_table.groupby("PATIENT"):
+            patient_slides: List[Path] = []
             for _, row in group.iterrows():
-                slide_filename = str(row["FILENAME"])
-                for (_, [slide_path]) in slide_paths:
-                    if slide_path.stem == slide_filename:
-                        patient_slides.append(self.root_dir / slide_path)
+                filename = str(row["FILENAME"])
+                for rel, [slide_path] in slide_list:
+                    if slide_path.stem == filename:
+                        patient_slides.append(slide_path)
                         break
-            
-            patient_paths.append((patient_id, patient_slides))
+                
+            if patient_slides:
+                patient_paths.append((str(patient_id), patient_slides))
 
         return patient_paths
-        
-    def __len__(self):
-        return len(self.slide_paths)
     
-    def __getitem__(self, idx):
-        id, h5_paths = self.slide_paths[idx]
+    def __len__(self) -> int:
+        return len(self.slide_paths)
 
-        all_feats = []
-        all_coords = []
-        offset = torch.zeros((2,), dtype=torch.int64)
+    def __getitem__(self, idx: int) -> Tuple[str, torch.Tensor, torch.Tensor]:
+        identifier, paths = self.slide_paths[idx]
+        all_feats: List[torch.Tensor] = []
+        all_coords: List[torch.Tensor] = []
+        offset = torch.zeros(2, dtype=torch.int64)
 
-        for h5_path in h5_paths:
-            with h5py.File(h5_path, "r") as f:
+        for p in paths:
+            with h5py.File(p, "r") as f:
                 feats = torch.tensor(f["feats"][:], dtype=torch.float32)
                 # coords: CoordsInfo = get_coords(f)
                 # hard coded for my prepro data :))))
                 coords_um = torch.from_numpy(f["coords"][:])
-                coords = CoordsInfo(coords_um, tile_size_um = 256.0, tile_size_px = 512)
+            coords = CoordsInfo(coords_um, tile_size_um=256.0, tile_size_px=512)
 
-            # Convert coordinates from microns to pixels
-            coords_px = coords.coords_um / coords.mpp  # Convert to pixels
-            coords_px = coords_px.to(torch.int64) # Convert to integer
+            # convert to pixel coordinates and apply offset
+            coords_px = (coords.coords_um / coords.mpp).to(torch.int64)
             coords_px += offset
-            offset[0] = coords_px[:, 0].max() + 10*coords.tile_size_px 
+
+            # update offset for next slide
+            offset[0] = coords_px[:, 0].max() + self.margin * coords.tile_size_px
 
             all_feats.append(feats)
             all_coords.append(coords_px)
 
-        all_feats = torch.cat(all_feats, dim=0)
-        all_coords = torch.cat(all_coords, dim=0)
-        
-        return str(id), all_feats, all_coords
+        feats_concat = torch.cat(all_feats, dim=0)
+        coords_concat = torch.cat(all_coords, dim=0)
+        return identifier, feats_concat, coords_concat
 
 
 class Titan(Encoder):
@@ -113,27 +153,27 @@ class Titan(Encoder):
         super().__init__(model=model, identifier="mahmood-titan")
     
     def encode_slides(self, output_dir, feat_dir, device, **kwargs) -> None:
-        self._encode(output_dir, feat_dir, device)
+        """Encode slide from slide features."""
+        config = EmbeddingConfig(Path(feat_dir), Path(output_dir), Mode.SLIDE) 
+        self._encode(config, device, **kwargs)
 
-    def encode_patients(
-        self, output_dir, feat_dir, slide_table_path, device, **kwargs
-    ) -> None:
-        """Encode patients from slide features."""
-        self._encode(output_dir, feat_dir, device, slide_table_path)
+    def encode_patients(self, output_dir, feat_dir, slide_table_path, device, **kwargs) -> None:
+        """Encode patient from all their slide features."""
+        config = EmbeddingConfig(
+            Path(feat_dir), Path(output_dir), Mode.PATIENT, slide_table_path
+        ) 
+        self._encode(config, device, **kwargs)
     
-    def _encode(self, output_dir, feat_dir, device, slide_table_path=None, **kwargs) -> None:
-        output_dir = Path(output_dir)
-        feat_dir = Path(feat_dir)
-
+    def _encode(self, config, device, **kwargs) -> None:
         # Ensure model weights and biases are on the same device as the input
         self.model.to(device).eval()
 
-        mode = "slide" if slide_table_path is None else "patient"
-        output_name = f"{self.identifier}-{mode}-{get_processing_code_hash(Path(__file__))[:8]}.h5"
-        output_file = output_dir / output_name
+        output_name = f"{self.identifier}-{config.mode.name}" \
+                      f"-{get_processing_code_hash(Path(__file__))[:8]}.h5"
+        output_file = config.output_dir / output_name
 
         if output_file.exists():
-            tqdm.write(f"Output file {output_file} already exists, skipping")
+            tqdm.write(f"Output file {output_file} already exists, skipping...")
             return
         
         # some autocast setup
@@ -142,21 +182,23 @@ class Titan(Encoder):
         enable_autocast = torch.amp.autocast_mode.is_autocast_available(device.type)
         torch.set_float32_matmul_precision("high")
 
-        emb_dataset = EmbeddingDataset(feat_dir, output_dir, slide_table_path)
-        emb_dataloader = DataLoader(emb_dataset, batch_size=1, shuffle=True, num_workers=8, pin_memory=is_cuda)
+        emb_dataset = EmbeddingDataset(config)
+        emb_dataloader = DataLoader(
+            emb_dataset, batch_size=1, shuffle=True, num_workers=32, pin_memory=is_cuda
+        )
 
+        pbar = tqdm(emb_dataloader, leave=True)
         with h5py.File(output_file, "w") as h5_file:
             h5_file.attrs["encoder"] = self.identifier
             h5_file.attrs["stamp_version"] = stamp.__version__
 
-            for [id], feats, coords_px in tqdm(emb_dataloader, leave=True):
-                print(id, feats.shape, feats.dtype, coords_px.shape, coords_px.dtype)
+            for [id], feats, coords_px in pbar:
+                pbar.set_description_str(f"Encoding {id}")
                 with torch.inference_mode(), torch.autocast(device.type, enabled=is_cuda):
                     slide_emb = self.model.encode_slide_from_patch_features(
                         feats.to(device), coords_px.to(device), 512
                     )
                 slide_emb = slide_emb[0].to("cpu", torch.float32).numpy()
-                
                 h5_file.create_dataset(id, data=slide_emb)
 
-        tqdm.write(f"Finished encoding, saved all {mode} embeddings to {output_file}")
+        tqdm.write(f"Finished encoding, saved all {config.mode.name} embeddings to {output_file}")
